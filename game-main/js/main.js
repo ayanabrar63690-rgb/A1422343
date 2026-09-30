@@ -57,6 +57,9 @@ const net = {
   sfx: [],
   disarmSfx: null,
   guestKinds: "",
+  lastKeys: null, // last input payload sent (guest dedup)
+  snapTimes: [], // recent snapshot arrival times (link-rate meter)
+  linkTick: 0,
 };
 
 function netStatus(txt) {
@@ -123,6 +126,7 @@ function onNetMsg(m) {
   }
   if (m.t === "snap" && net.mode === "guest") {
     net.snap = m;
+    net.snapTimes.push(performance.now());
     return;
   }
   if (m.t === "bye" && net.mode === "guest") {
@@ -788,7 +792,13 @@ function hostTick(dt) {
 
 function guestTick(dt) {
   try {
-    if (net.api) net.api.send({ t: "in", keys: [...keys] });
+    if (net.api) {
+      const keyStr = [...keys].sort().join(",");
+      if (keyStr !== net.lastKeys) {
+        net.lastKeys = keyStr;
+        net.api.send({ t: "in", keys: [...keys] });
+      }
+    }
     if (net.snap) {
       applySnap(net.snap);
       net.snap = null;
@@ -803,6 +813,12 @@ function guestTick(dt) {
     return;
   }
   if (!prevKeys.has("h") && keys.has("h")) showBoxes = !showBoxes;
+  if (++net.linkTick % 30 === 0) {
+    const now = performance.now();
+    net.snapTimes = net.snapTimes.filter((t) => now - t < 1000);
+    document.getElementById("fight-label").textContent =
+      `${map.name} — GUEST (P2 you) — LINK ${net.snapTimes.length}/s`;
+  }
   const simDt = koSeen && koT < 1.4 ? dt * 0.35 : dt;
   drawFight(simDt);
 }

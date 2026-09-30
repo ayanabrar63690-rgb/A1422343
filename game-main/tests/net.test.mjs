@@ -94,6 +94,10 @@ function wsConnect() {
           if (buf.length < 4) break;
           len = buf.readUInt16BE(2);
           hlen = 4;
+        } else if (len === 127) {
+          if (buf.length < 10) break;
+          len = Number(buf.readBigUInt64BE(2));
+          hlen = 10;
         }
         if (buf.length < hlen + len) break;
         if (op === 0x1) msgs.push(JSON.parse(buf.subarray(hlen, hlen + len).toString()));
@@ -111,11 +115,16 @@ function wsConnect() {
         for (let i = 0; i < payload.length; i++) out[i] = payload[i] ^ mask[i % 4];
         let head;
         if (payload.length < 126) head = Buffer.from([0x81, 0x80 | payload.length]);
-        else {
+        else if (payload.length < 65536) {
           head = Buffer.alloc(4);
           head[0] = 0x81;
           head[1] = 0x80 | 126;
           head.writeUInt16BE(payload.length, 2);
+        } else {
+          head = Buffer.alloc(10);
+          head[0] = 0x81;
+          head[1] = 0x80 | 127;
+          head.writeBigUInt64BE(BigInt(payload.length), 2);
         }
         sock.write(Buffer.concat([head, mask, out]));
       },
@@ -158,6 +167,16 @@ host.send({ t: "snap", p1: { hp: 90 }, roundTime: 80 });
 const snap = await waitFor(guest, (m) => m.t === "snap");
 assert.strictEqual(snap.p1.hp, 90);
 assert.strictEqual(snap.roundTime, 80);
+
+// large frames: snapshot-sized (126-branch) and huge (127-branch)
+const big = { t: "snap", blob: "x".repeat(2000) };
+host.send(big);
+const gotBig = await waitFor(guest, (m) => m.t === "snap" && m.blob && m.blob.length === 2000);
+assert.strictEqual(gotBig.blob.length, 2000, "2KB frame survives");
+const huge = { t: "snap", blob: "y".repeat(70000) };
+host.send(huge);
+const gotHuge = await waitFor(guest, (m) => m.t === "snap" && m.blob && m.blob.length === 70000);
+assert.strictEqual(gotHuge.blob.length, 70000, "70KB frame survives");
 
 // third connection replaces the stale guest slot (reconnects always work)
 const third = await wsConnect();

@@ -23,12 +23,12 @@ function sendFrame(sock, obj) {
   if (len < 126) {
     header = Buffer.from([0x81, len]);
   } else if (len < 65536) {
-    header = Buffer.alloc(3);
+    header = Buffer.alloc(4);
     header[0] = 0x81;
     header[1] = 126;
     header.writeUInt16BE(len, 2);
   } else {
-    header = Buffer.alloc(9);
+    header = Buffer.alloc(10);
     header[0] = 0x81;
     header[1] = 127;
     header.writeBigUInt64BE(BigInt(len), 2);
@@ -107,12 +107,12 @@ function pump(sock, buf) {
         if (len < 126) {
           outHead = Buffer.from([0x81, len]);
         } else if (len < 65536) {
-          outHead = Buffer.alloc(3);
+          outHead = Buffer.alloc(4);
           outHead[0] = 0x81;
           outHead[1] = 126;
           outHead.writeUInt16BE(len, 2);
         } else {
-          outHead = Buffer.alloc(9);
+          outHead = Buffer.alloc(10);
           outHead[0] = 0x81;
           outHead[1] = 127;
           outHead.writeBigUInt64BE(BigInt(len), 2);
@@ -143,6 +143,9 @@ server.on("upgrade", (req, sock) => {
       "Connection: Upgrade\r\n" +
       `Sec-WebSocket-Accept: ${accept}\r\n\r\n`
   );
+  try {
+    sock.setNoDelay(true);
+  } catch { /* ignore */ }
   let buf = Buffer.alloc(0);
   sock.on("data", (chunk) => {
     buf = pump(sock, Buffer.concat([buf, chunk]));
