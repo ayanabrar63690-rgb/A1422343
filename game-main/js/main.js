@@ -97,7 +97,7 @@ function onNetMsg(m) {
       netStatus("hosting — waiting for guest P2…");
     } else if (m.role === "guest" && netWanted === "guest") {
       net.mode = "guest";
-      netStatus("connected — waiting for host to start…");
+      netStatus("connected! now START a fight on the host (START → fighters → map)");
     } else {
       netStatus(m.role === "host" ? "relay already has a host — reload to retry" : "relay already has a guest — reload to retry");
       net.api?.close();
@@ -113,7 +113,7 @@ function onNetMsg(m) {
       net.prev = new Set();
     }
     if (state === STATE.FIGHT) hostLabel();
-    else netStatus(m.on ? "guest connected — start the fight!" : "hosting — waiting for guest P2…");
+    else netStatus(m.on ? "guest connected! press START, pick fighters + map" : "hosting — waiting for guest P2…");
     return;
   }
   if (m.t === "in" && net.mode === "host") {
@@ -147,7 +147,21 @@ function netConnect(want, ip) {
   netWanted = want;
   saveNetIP(ip || "");
   const port = Number(document.getElementById("net-port")?.value || 8125) || 8125;
-  net.api = connectNet(relayURL(want === "host" ? "localhost" : ip, port), onNetMsg);
+  const url = relayURL(want === "host" ? "localhost" : ip, port);
+  const onLinkFail = () => {
+    if (net.api) {
+      net.api.close();
+      net.api = null;
+    }
+    net.mode = "off";
+    netWanted = null;
+    netStatus(
+      want === "host"
+        ? "relay not found — run this first:  node net/relay.js 8125"
+        : `can't reach ${url} — check IP, port, and that the host runs the relay`
+    );
+  };
+  net.api = connectNet(url, onNetMsg, onLinkFail);
   netStatus(want === "host" ? "starting relay link…" : `connecting to ${ip || "localhost"}…`);
 }
 
@@ -636,10 +650,6 @@ function drawBoxes() {
 }
 
 let last = performance.now();
-function loop(now) {
-  const dt = Math.min(0.05, (now - last) / 1000);
-  last = now;
-  elapsed += dt;
 
 function hostTick(dt) {
     if (!match.over && !koSeen && roundTime > 0 && (p1.hp <= 0 || p2.hp <= 0)) {
@@ -767,14 +777,25 @@ function hostTick(dt) {
       }
     }
     drawFight(simDt);
-    if (net.mode === "host" && net.api) net.api.send(buildSnap());
+    if (net.mode === "host" && net.api) {
+      try {
+        net.api.send(buildSnap());
+      } catch (err) {
+        netStatus("net error: " + (err && err.message ? err.message : err));
+      }
+    }
 }
 
 function guestTick(dt) {
-  if (net.api) net.api.send({ t: "in", keys: [...keys] });
-  if (net.snap) {
-    applySnap(net.snap);
-    net.snap = null;
+  try {
+    if (net.api) net.api.send({ t: "in", keys: [...keys] });
+    if (net.snap) {
+      applySnap(net.snap);
+      net.snap = null;
+    }
+  } catch (err) {
+    netStatus("net error: " + (err && err.message ? err.message : err));
+    return;
   }
   if (state !== STATE.FIGHT) return;
   if (!prevKeys.has("escape") && keys.has("escape")) {
@@ -812,7 +833,10 @@ function drawFight(simDt) {
     drawHUD();
 }
 
-let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  elapsed += dt;
   if (state === STATE.FIGHT) {
     if (net.mode === "guest") guestTick(dt);
     else hostTick(dt);
@@ -827,6 +851,12 @@ let last = performance.now();
 }
 
 initInput();
+
+window.addEventListener("error", (e) => {
+  if (net.mode === "off") return;
+  const msg = (e && e.message) || "unknown error";
+  netStatus("net error: " + msg);
+});
 
 document.getElementById("btn-host").onclick = () => {
   AudioFX.blip(660);

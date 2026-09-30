@@ -19,11 +19,13 @@ export function relayURL(ip, port = 8125) {
 }
 
 // onMsg(msg, api) for every parsed JSON message. api.send(obj), api.close().
-export function connectNet(url, onMsg) {
+// onLinkFail() fires if the socket errors/closes before the relay assigns a role.
+export function connectNet(url, onMsg, onLinkFail) {
   const ws = new WebSocket(url);
   const api = {
     sock: ws,
     role: null,
+    linked: false,
     send(obj) {
       if (ws.readyState === 1) ws.send(JSON.stringify(obj));
     },
@@ -33,6 +35,26 @@ export function connectNet(url, onMsg) {
       } catch { /* ignore */ }
     },
   };
+  const fail = () => {
+    if (!api.linked && onLinkFail) {
+      const cb = onLinkFail;
+      onLinkFail = null;
+      cb();
+    }
+  };
+  ws.onopen = () => {
+    // Role should follow within a heartbeat; if the relay never answers, fail loud.
+    setTimeout(() => {
+      if (!api.linked) {
+        fail();
+        try {
+          ws.close();
+        } catch { /* ignore */ }
+      }
+    }, 3000);
+  };
+  ws.onerror = fail;
+  ws.onclose = fail;
   ws.onmessage = (ev) => {
     let m;
     try {
@@ -41,6 +63,7 @@ export function connectNet(url, onMsg) {
       return;
     }
     if (!m) return;
+    if (m.t === "role") api.linked = true;
     if (m.t === "ping") {
       api.send({ t: "pong" });
       return;
