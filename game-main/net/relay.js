@@ -229,8 +229,15 @@ export function stopRelay() {
   });
 }
 
-const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].split("/").pop());
+const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].split(/[\\/]/).pop());
 if (isMain) {
+  server.on("error", (e) => {
+    if (e && e.code === "EADDRINUSE") {
+      console.error(`port ${PORT} is busy — a relay is already running, or try: node net/relay.js 8126`);
+      process.exit(1);
+    }
+    throw e;
+  });
   startRelay().then(() => {
     console.log(`pixel-brawl relay on :${PORT} — host clicks HOST, guest opens http://<host-ip>:8000`);
   });

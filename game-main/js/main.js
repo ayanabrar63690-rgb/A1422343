@@ -149,9 +149,9 @@ let netWanted = null;
 function netConnect(want, ip) {
   teardownNet();
   netWanted = want;
-  saveNetIP(ip || "");
+  saveNetIP(want === "guest" ? ip || "" : lastNetIP());
   const port = Number(document.getElementById("net-port")?.value || 8125) || 8125;
-  const url = relayURL(want === "host" ? "localhost" : ip, port);
+  const url = relayURL(ip || "localhost", port);
   const onLinkFail = () => {
     if (net.api) {
       net.api.close();
@@ -874,15 +874,22 @@ window.addEventListener("error", (e) => {
   netStatus("net error: " + msg);
 });
 
+let netPendingRole = null;
 document.getElementById("btn-host").onclick = () => {
   AudioFX.blip(660);
-  document.getElementById("net-row")?.classList.add("hidden");
-  netConnect("host");
+  netPendingRole = "host";
+  const row = document.getElementById("net-row");
+  row?.classList.remove("hidden");
+  const ip = document.getElementById("net-ip");
+  if (ip && !ip.value) ip.value = "localhost";
+  const port = document.getElementById("net-port");
+  if (port && !port.value) port.value = "8125";
 };
 document.getElementById("btn-join").onclick = () => {
   AudioFX.blip(660);
+  netPendingRole = "guest";
   const row = document.getElementById("net-row");
-  row?.classList.toggle("hidden");
+  row?.classList.remove("hidden");
   const ip = document.getElementById("net-ip");
   if (ip && !ip.value) ip.value = lastNetIP();
   const port = document.getElementById("net-port");
@@ -891,7 +898,7 @@ document.getElementById("btn-join").onclick = () => {
 document.getElementById("btn-connect").onclick = () => {
   AudioFX.blip(660);
   const ip = document.getElementById("net-ip")?.value || "localhost";
-  netConnect("guest", ip);
+  netConnect(netPendingRole || "guest", ip);
 };
 document.getElementById("btn-netback").onclick = () => {
   AudioFX.blip(400);
