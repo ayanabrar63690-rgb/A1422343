@@ -8,7 +8,7 @@ import { pickMap, MAPS } from "./maps/index.js";
 import { separate } from "./physics.js";
 import { Hitstop, hurtboxOf, hitboxOf } from "./combat/combat.js";
 import { RAGE } from "./combat/data.js";
-import { Particles, drawShadow, Sparks, Clones, Beams, Missiles, Bolts, FlyingHammer } from "./effects.js";
+import { Particles, drawShadow, Sparks, Clones, Beams, Missiles, Bolts, FlyingHammer, WebLines } from "./effects.js";
 import { initScreens } from "./ui/screens.js";
 import { pushCode, isUroborosUnlocked, unlockUroboros } from "./ui/unlock.js";
 import { buildPortrait } from "./render/sprites.js";
@@ -191,6 +191,7 @@ function buildSnap() {
     p2: snapFighter(p2, frameOf(p2)),
     fx: {
       beams: Beams.list.map((b) => ({ x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2, t: b.t, life: b.life, color: b.color })),
+      weblines: WebLines.list.map((l) => ({ x1: l.x1, y1: l.y1, x2: l.x2, y2: l.y2, t: l.t, life: l.life })),
       missiles: Missiles.list.map((m) => ({ sx: m.sx, sy: m.sy, tx: m.tx, ty: m.ty, t: m.t, fall: m.fall })),
       bolts: Bolts.list.map((b) => ({ segs: [...b.segs], yGround: b.yGround, yTop: b.yTop, t: b.t, life: b.life })),
       hammer: FlyingHammer.cur ? { ...FlyingHammer.cur } : null,
@@ -232,6 +233,7 @@ function applySnap(m) {
   guestFrameIdx(p1, m.p1.frameIdx);
   guestFrameIdx(p2, m.p2.frameIdx);
   Beams.list = (m.fx.beams || []).map((b) => ({ ...b }));
+  WebLines.list = (m.fx.weblines || []).map((l) => ({ ...l }));
   Missiles.list = (m.fx.missiles || []).map((x) => ({ ...x }));
   Bolts.list = (m.fx.bolts || []).map((b) => ({ ...b, segs: [...b.segs] }));
   if (m.fx.hammer) FlyingHammer.show(m.fx.hammer.x, m.fx.hammer.y, m.fx.hammer.dir);
@@ -344,6 +346,7 @@ function resetMatch() {
   Sparks.list.length = 0;
   Clones.list.length = 0;
   Beams.list.length = 0;
+  WebLines.list.length = 0;
   Bolts.list.length = 0;
   FlyingHammer.hide();
   Missiles.list.length = 0;
@@ -363,6 +366,7 @@ function nextRound() {
   Sparks.list.length = 0;
   Clones.list.length = 0;
   Beams.list.length = 0;
+  WebLines.list.length = 0;
   Bolts.list.length = 0;
   FlyingHammer.hide();
   Missiles.list.length = 0;
@@ -435,10 +439,16 @@ function drive(fighter, map, tap, foe, keySet = keys, prevSet = prevKeys) {
   const eEdge = !prevSet.has(map.edge) && keySet.has(map.edge);
 
   if (eEdge) {
-    if (!fighter.trySamuraiEdge() && !fighter.tryRepulsor() && !fighter.tryHammer()) fighter.pressHeavy();
+    if (!fighter.trySamuraiEdge() && !fighter.tryRepulsor() && !fighter.tryHammer() && !fighter.tryPhoton() && !fighter.tryWebZip()) fighter.pressHeavy();
   }
   if (lEdge) fighter.pressLight();
-  if (hEdge) fighter.pressHeavy();
+  if (hEdge) {
+    if (fighter.kind === "doom") {
+      const toward = foe.x >= fighter.x ? 1 : -1;
+      if (fighter.moving === -toward && fighter.trySnap(foe)) { /* snapped */ }
+      else fighter.pressHeavy();
+    } else fighter.pressHeavy();
+  }
   if (!prevSet.has(map.grab) && keySet.has(map.grab)) fighter.pressGrab();
 
   if (!prevSet.has(map.tag) && keySet.has(map.tag)) fighter.queueTag("next");
@@ -756,6 +766,7 @@ function hostTick(dt) {
       Sparks.update(simDt);
       Clones.update(simDt);
       Beams.update(simDt);
+      WebLines.update(simDt);
       Bolts.update(simDt);
       Missiles.update(simDt);
 
@@ -841,6 +852,7 @@ function drawFight(simDt) {
     if (showBoxes) drawBoxes();
     Sparks.draw(ctx, cam.x);
     Beams.draw(ctx, cam.x);
+    WebLines.draw(ctx, cam.x);
     Bolts.draw(ctx, cam.x);
     FlyingHammer.draw(ctx, cam.x);
     Missiles.draw(ctx, cam.x);

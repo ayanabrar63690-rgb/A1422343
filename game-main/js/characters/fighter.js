@@ -2,14 +2,14 @@ import { SPRITE_SCALE, MOVE, GROUND_Y, SETTINGS } from "../config.js";
 import { buildSprites, FEET_PAD } from "../render/sprites.js";
 import { flipped } from "../render/pixel.js";
 import { integrateAir, clampArena } from "../physics.js";
-import { BASE_HP, FRAME_FOR, movesFor, GRAB, RAGE, REGEN, UROBOROS_REGEN, BLEED, DECAY } from "../combat/data.js";
+import { BASE_HP, FRAME_FOR, movesFor, GRAB, RAGE, REGEN, WESKER_REGEN, UROBOROS_REGEN, BLEED, DECAY, SPIDERMAN_SPECIALS } from "../combat/data.js";
 import { resolveStrike, grabCheck, vulnMult } from "../combat/combat.js";
-import { tryWeskerSpecial, tryHomelanderSpecial, tryWolverineSpecial, tryWeskerShadow, tryHulkSpecial, tryIronmanSpecial, tryThorSpecial, tryUroborosSpecial, updateSpecial } from "../combat/specials.js";
+import { tryWeskerSpecial, tryHomelanderSpecial, tryWolverineSpecial, tryWeskerShadow, tryHulkSpecial, tryIronmanSpecial, tryThorSpecial, tryUroborosSpecial, trySpidermanSpecial, trySpidermanZip, trySpidermanSwing, tryDoomSpecial, tryDoomPhoton, tryDoomSnap, updateSpecial } from "../combat/specials.js";
 import { AudioFX } from "../audio.js";
 import { Sparks } from "../effects.js";
 import { CHARACTERS } from "./data.js";
 
-const SIZE = Object.freeze({ wesker: 1, homelander: 1, wolverine: 1, hulk: 1.32, uroboros: 1.32 });
+const SIZE = Object.freeze({ wesker: 1, homelander: 1, wolverine: 1, hulk: 1.32, uroboros: 1.32, spiderman: 1, doom: 1 });
 
 const EDGE_IFRAMES = 0.25;
 
@@ -93,10 +93,15 @@ export class Fighter {
     this.decayT = 0;
     this.vuln = false;
     this.rushLowT = 0;
+    this.goreMarks = 0;
 
     this.specialId = null;
     this.special = null;
     this.invulnT = 0;
+    this.webT = 0;
+    this.zipCD = 0;
+    this.swingCD = 0;
+    this.snapCD = 0;
     this.camKick = 0;
     this.sprites = buildSprites(kind);
   }
@@ -159,7 +164,7 @@ export class Fighter {
   queueTag(which) { this.tagRequest = which; }
 
   pressLight() {
-    if (this.hp <= 0 || this.freezeT > 0) return;
+    if (this.hp <= 0 || this.freezeT > 0 || this.webT > 0) return;
     if (this.state === FState.ATTACK) {
       const mv = this.attackMove;
       if (mv && mv.chainTo && (this.phase === "active" || this.phase === "recovery")) {
@@ -179,7 +184,7 @@ export class Fighter {
   }
 
   pressHeavy() {
-    if (this.hp <= 0 || this.freezeT > 0) return;
+    if (this.hp <= 0 || this.freezeT > 0 || this.webT > 0) return;
     if (!this.grounded) {
       if (this.state !== FState.ATTACK &&
         (this.state === FState.JUMP || this.state === FState.FALL)) {
@@ -203,7 +208,7 @@ export class Fighter {
   }
 
   pressGrab() {
-    if (this.hp <= 0 || this.freezeT > 0) return;
+    if (this.hp <= 0 || this.freezeT > 0 || this.webT > 0) return;
     if (this.grounded &&
       (this.state === FState.IDLE || this.state === FState.WALK ||
        this.state === FState.CROUCH || this.state === FState.SNEAK)) {
@@ -218,7 +223,7 @@ export class Fighter {
 
   trySamuraiEdge() {
     if (this.kind !== "wesker") return false;
-    if (this.hp <= 0 || this.freezeT > 0 || !this.grounded) return false;
+    if (this.hp <= 0 || this.freezeT > 0 || this.webT > 0 || !this.grounded) return false;
     if (this.state === FState.ATTACK) {
       if (this.attackId === "gun") return false;
       this.fireGun();
@@ -251,7 +256,7 @@ export class Fighter {
 
   tryRepulsor() {
     if (this.kind !== "ironman") return false;
-    if (this.hp <= 0 || this.freezeT > 0 || !this.grounded) return false;
+    if (this.hp <= 0 || this.freezeT > 0 || this.webT > 0 || !this.grounded) return false;
     if (this.state === FState.ATTACK) {
       if (this.attackId === "repulsor") return false;
       this.startAttack("repulsor");
@@ -275,7 +280,7 @@ export class Fighter {
 
   tryHammer() {
     if (this.kind !== "thor") return false;
-    if (this.hp <= 0 || this.freezeT > 0 || !this.grounded) return false;
+    if (this.hp <= 0 || this.freezeT > 0 || this.webT > 0 || !this.grounded) return false;
     if (this.state === FState.ATTACK) {
       if (this.attackId === "hammer") return false;
       this.startAttack("hammer");
@@ -297,6 +302,15 @@ export class Fighter {
     }
   }
 
+  tryPhoton() {
+    if (this.kind !== "doom") return false;
+    return tryDoomPhoton(this);
+  }
+  trySnap(foe) {
+    if (this.kind !== "doom") return false;
+    return tryDoomSnap(this, foe);
+  }
+
   takeGrabbed(grabber) {
     this.attackId = null;
     this.phase = null;
@@ -312,9 +326,24 @@ export class Fighter {
 
   tryShadow(screenDir) {
     if (this.kind !== "wesker") return false;
+    if (this.webT > 0) return false;
     return tryWeskerShadow(this, screenDir);
   }
-  trySpecial(id, foe) {
+  tryWebZip(screenDir) {
+    if (this.kind !== "spiderman") return false;
+    const dir = screenDir === undefined || screenDir === null
+      ? (this.moving !== 0 ? this.moving : this.facing)
+      : screenDir;
+    return trySpidermanZip(this, dir >= 0 ? 1 : -1);
+  }
+  trySwing(screenDir) {
+    if (this.kind !== "spiderman") return false;
+    const dir = screenDir === undefined || screenDir === null
+      ? (this.moving !== 0 ? this.moving : this.facing)
+      : screenDir;
+    return trySpidermanSwing(this, dir >= 0 ? 1 : -1);
+  }  trySpecial(id, foe) {
+    if (this.webT > 0) return false;
     if (this.kind === "wesker") return tryWeskerSpecial(this, id, foe);
     if (this.kind === "wolverine") {
       const map = { jaguar: "rush", phantom: "barrage", ragemode: "ragemode" };
@@ -340,6 +369,14 @@ export class Fighter {
       const map = { jaguar: "wrap", phantom: "rock", ragemode: "impale" };
       return tryUroborosSpecial(this, map[id] || id, foe);
     }
+    if (this.kind === "spiderman") {
+      const map = { jaguar: "webshot", phantom: "yank", ragemode: "maelstrom" };
+      return trySpidermanSpecial(this, map[id] || id, foe);
+    }
+    if (this.kind === "doom") {
+      const map = { jaguar: "beam", phantom: "stack", ragemode: "throne" };
+      return tryDoomSpecial(this, map[id] || id, foe);
+    }
     return false;
   }
 
@@ -359,6 +396,7 @@ export class Fighter {
     const mult = vulnMult(this, move.heat);
     this.hp = Math.max(0, this.hp - move.damage * mult);
     this.sinceDamageT = 0;
+    this.webT = 0;
     this.attackId = null;
     this.phase = null;
     this.chainQueued = false;
@@ -392,6 +430,7 @@ export class Fighter {
   }
 
   takeBlocked(move, dir) {
+    this.webT = 0;
     this.attackId = null;
     this.phase = null;
     this.chainQueued = false;
@@ -431,6 +470,18 @@ export class Fighter {
       clampArena(this);
       return;
     }
+    if (this.webT > 0) this.webT -= dt;
+    if (this.zipCD > 0) this.zipCD -= dt;
+    if (this.swingCD > 0) this.swingCD -= dt;
+    if (this.snapCD > 0) this.snapCD -= dt;
+    const webbed = this.webT > 0 && this.hp > 0;
+    if (webbed) {
+      this.jumpQueued = false;
+      this.dashQueued = 0;
+      this.tagRequest = null;
+      this.moving = 0;
+      this.blockHeld = false;
+    }
 
     if (
       this.state !== FState.ATTACK &&
@@ -450,6 +501,8 @@ export class Fighter {
     if (this.hp > 0 && this.hp < this.maxHp && this.sinceDamageT >= REGEN.delay && this.state !== FState.KO) {
       if (this.kind === "wolverine") {
         this.hp = Math.min(this.maxHp, this.hp + REGEN.rate * dt);
+      } else if (this.kind === "wesker" && this.sinceDamageT >= WESKER_REGEN.delay) {
+        this.hp = Math.min(this.maxHp, this.hp + WESKER_REGEN.rate * dt);
       } else if (this.kind === "uroboros" && this.sinceDamageT >= UROBOROS_REGEN.delay) {
         this.hp = Math.min(this.maxHp, this.hp + UROBOROS_REGEN.rate * dt);
       }
@@ -498,6 +551,10 @@ export class Fighter {
         this.state !== "SPECIAL" && this.state !== "ATTACK") {
         if (this.tryShadow(wantDash)) return;
       }
+      if (this.kind === "spiderman" && !this.grounded &&
+        (this.state === "JUMP" || this.state === "FALL")) {
+        if (this.trySwing(wantDash)) return;
+      }
       const toward = opponent.x >= this.x ? 1 : -1;
       if (wantDash === toward) {
         this.state = FState.DASH;
@@ -534,7 +591,7 @@ export class Fighter {
           this.lungeLeft -= step;
           if (this.phase === "active" && mv.ray && !this.rayFired) {
             this.rayFired = true;
-            if (this.attackId === "repulsor") {
+            if (this.attackId === "repulsor" || this.attackId === "photon") {
 
               AudioFX.repulsor();
               Sparks.muzzle(this.x + this.attackDir * 45, this.y - 117, this.attackDir);
@@ -548,7 +605,22 @@ export class Fighter {
           }
           if (this.phase === "active" && !this.hasHit) {
             const contact = resolveStrike(this, opponent, mv);
-            if (contact) this.hasHit = true;
+            if (contact) {
+              this.hasHit = true;
+              if (this.kind === "uroboros" && contact.type === "hit") {
+                // tentacle massacre: victim keeps bleeding holes, ground stays stained
+                opponent.goreMarks = Math.min(6, (opponent.goreMarks || 0) + 1);
+                Sparks.gore(opponent.x, opponent.y - 90);
+                Sparks.pool(opponent.x, GROUND_Y);
+                this.camKick = Math.max(this.camKick, 0.3);
+              }
+            }
+            if (this.kind === "uroboros" && !this.hasHit) {
+              // sweep trail: tentacle tip leaves a bloody streak mid-swing
+              const tipX = this.x + this.attackDir * (mv.hit.w / 2 + 20);
+              if (Math.random() < 0.6) Sparks.violet(tipX, this.y - 70 - Math.random() * 40);
+              if (Math.random() < 0.3) Sparks.blood(tipX, this.y - 80);
+            }
           }
         }
         if (this.phaseT <= 0) {
@@ -556,6 +628,11 @@ export class Fighter {
             this.phase = "active";
             this.phaseT = mv.active;
             if (this.kind === "wolverine") AudioFX.slash();
+            if (this.kind === "uroboros") {
+              AudioFX.whoosh();
+              AudioFX.squelch();
+              Sparks.slash(this.x + this.attackDir * (mv.hit.w / 2), this.y - 80, this.attackDir);
+            }
           } else if (this.phase === "active") {
             if (!this.hasHit) AudioFX.whiff();
             this.phase = "recovery";
@@ -746,6 +823,7 @@ export class Fighter {
             Sparks.dust(this.x, GROUND_Y);
           }
         } else {
+          if (wantDash && this.kind === "spiderman") { startDash(); break; }
           if (this.moving !== 0) this.x += this.moving * this.speeds.air * dt;
           integrateAir(this, dt);
           if (this.vy >= 0) this.state = FState.FALL;
@@ -754,6 +832,7 @@ export class Fighter {
         break;
       }
       case FState.FALL: {
+        if (wantDash && this.kind === "spiderman") { startDash(); break; }
         if (this.moving !== 0) this.x += this.moving * this.speeds.air * dt;
         integrateAir(this, dt);
         if (this.grounded) this.land();
@@ -830,6 +909,12 @@ export class Fighter {
 
         const kit = FRAME_FOR[this.kind] ?? FRAME_FOR.wesker;
         const fr = kit[this.attackId] ?? kit.light1;
+        if (this.kind === "spiderman" && this.phase === "active") {
+          const flick = Math.floor(this.animTime * 14) % 2 === 0;
+          const alt = fr.recovery === fr.active ? fr.startup : fr.recovery;
+          const idx = flick ? fr.active : alt;
+          return s.attack[idx] ?? s.attack[fr.active];
+        }
         const idx = this.phase === "startup" ? fr.startup
           : this.phase === "active" ? fr.active : fr.recovery;
         return s.attack[idx];
@@ -896,14 +981,85 @@ export class Fighter {
 
     const spun = this.kind === "wolverine" && SETTINGS.wolvieSpin &&
       this.state === FState.ATTACK && (this.phase === "active" || this.phase === "recovery");
-    const face = spun ? -this.facing : this.facing;
+    const spideySpin = this.kind === "spiderman" && this.state === FState.ATTACK &&
+      (this.attackId === "light2" || this.attackId === "heavy" || this.attackId === "airLight") &&
+      this.phase === "active" && Math.floor(this.animTime * 14) % 2 === 1;
+    const face = spun || spideySpin ? -this.facing : this.facing;
     const img = face === 1 ? frame : flipped(frame);
 
     const stunned = this.state === FState.HITSTUN || this.state === FState.BLOCKSTUN;
     const judder = stunned ? Math.round(Math.sin(this.animTime * 90) * 2) : 0;
+    const spideyLift = this.kind === "spiderman" && this.state === FState.ATTACK &&
+      (this.phase === "active" || this.phase === "recovery") &&
+      (this.attackId === "light2" || this.attackId === "heavy" || this.attackId === "light1") ? 8 : 0;
     const dx = Math.round(this.x - camX - this.w / 2) + judder;
-    const dy = Math.round(this.y - this.h + FEET_PAD * SPRITE_SCALE);
+    const dy = Math.round(this.y - this.h + FEET_PAD * SPRITE_SCALE) - spideyLift;
     ctx.drawImage(img, dx, dy, this.w, this.h);
+    this.drawGore(ctx, dx, dy);
+    this.drawWebs(ctx, dx, dy);
+  }
+
+  drawWebs(ctx, dx, dy) {
+    if (!(this.webT > 0) || this.state === "KO") return;
+    const fade = this.webT < 0.2 ? 0.5 : 1;
+    ctx.save();
+    ctx.globalAlpha = fade;
+    const u = Math.max(2, Math.round(this.w / 48));
+    const bands = [
+      [0.30, 0.30, 0.40, 2], [0.32, 0.42, 0.36, 2], [0.30, 0.54, 0.40, 2],
+      [0.36, 0.18, 0.28, 2], [0.44, 0.30, 2, 10],
+    ];
+    for (const [fx, fy, fw, fh] of bands) {
+      const bx = Math.round(dx + this.w * fx);
+      const by = Math.round(dy + this.h * fy);
+      const bw = fw < 5 ? Math.round(this.w * fw) : fw * u;
+      const bh = fh * u;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(bx, by, bw, bh);
+      ctx.fillStyle = "#9fd4ff";
+      ctx.fillRect(bx, by + Math.max(1, bh - 1), bw, 1);
+      ctx.fillStyle = "#5a6a7a";
+      for (let sx = 2; sx < bw - 1; sx += 4) ctx.fillRect(bx + sx, by, 1, bh);
+    }
+    ctx.restore();
+  }
+
+  drawGore(ctx, dx, dy) {
+    // persistent wound pits: victims scarred by uroboros keep holes; uroboros
+    // itself festers as it loses HP. Deterministic spots so they don't crawl.
+    let marks = Math.min(6, this.goreMarks || 0);
+    if (this.kind === "uroboros" && this.hp < this.maxHp) {
+      marks = Math.max(marks, Math.min(3, Math.ceil((1 - this.hp / this.maxHp) * 3)));
+    }
+    if (marks <= 0 || this.state === "KO") return;
+    const SPOTS = [
+      [0.44, 0.34, 3], [0.58, 0.44, 2], [0.48, 0.55, 3],
+      [0.56, 0.30, 2], [0.42, 0.47, 2], [0.52, 0.62, 3],
+    ];
+    const u = Math.max(2, Math.round(this.w / 48));
+    for (let i = 0; i < Math.min(marks, SPOTS.length); i++) {
+      let [fx, fy, r] = SPOTS[i];
+      if (this.facing === -1) fx = 1 - fx;
+      const px = Math.round(dx + this.w * fx);
+      const py = Math.round(dy + this.h * fy);
+      const s = r >= 3 ? u + 1 : u;
+      ctx.fillStyle = "#0b0b10";
+      ctx.fillRect(px - s, py - s, s * 2, s * 2);
+      ctx.fillStyle = "#c01414";
+      ctx.fillRect(px - s, py - s, s * 2, 1);
+      ctx.fillRect(px - s, py + s - 1, s * 2, 1);
+      ctx.fillRect(px - s, py - s, 1, s * 2);
+      ctx.fillRect(px + s - 1, py - s, 1, s * 2);
+      if (this.kind === "uroboros") {
+        ctx.fillStyle = "#ff7a1a";
+        ctx.fillRect(px, py, 1, 1);
+      }
+      // drip below deep holes
+      if (r >= 3) {
+        ctx.fillStyle = "#7a1016";
+        ctx.fillRect(px, py + s, 1, s + 2);
+      }
+    }
   }
 }
 

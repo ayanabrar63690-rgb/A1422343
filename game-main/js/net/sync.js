@@ -26,7 +26,7 @@ const FIGHTER_FIELDS = Object.freeze([
   "rage", "rageFlash", "moving", "crouchHeld", "blockLow",
   "blockRetreating", "specialId", "dashDir", "freezeT", "kT",
   "holdT", "invulnT", "vuln", "decayN", "bleedN", "sinceDamageT",
-  "animTime", "knockVX",
+  "animTime", "knockVX", "webT", "zipCD", "swingCD", "snapCD",
 ]);
 
 export function snapFighter(f, frameIdx) {

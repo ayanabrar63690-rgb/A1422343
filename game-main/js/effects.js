@@ -177,7 +177,7 @@ export const Sparks = {
         s.y += s.vy * dt;
         s.vy += 320 * dt;
         s.vx *= Math.max(0, 1 - 3 * dt);
-      } else if (s.kind === "mote" || s.kind === "vmote" || s.kind === "wisp" || s.kind === "smote") {
+      } else if (s.kind === "mote" || s.kind === "vmote" || s.kind === "wisp" || s.kind === "smote" || s.kind === "webstrand") {
         s.x += s.vx * dt;
         s.y += s.vy * dt;
       } else if (s.kind === "blood") {
@@ -224,12 +224,49 @@ export const Sparks = {
     }
   },
 
+  gore(x, y) {
+    // massacre burst: double blood + chunks that stick as a ground pool
+    this.blood(x, y);
+    this.blood(x, y);
+    for (let i = 0; i < 5; i++) {
+      this.list.push({
+        x: x + (Math.random() - 0.5) * 16, y: y - Math.random() * 20,
+        vx: (Math.random() - 0.5) * 340, vy: -60 - Math.random() * 220,
+        t: 0, life: 0.5 + Math.random() * 0.2, kind: "blood",
+      });
+    }
+    this.pool(x, y + 90);
+  },
+
+  pool(x, y) {
+    this.list.push({ x, y, t: 0, life: 6.0, kind: "pool", seed: Math.random() * 10 });
+    // cap pools so long gore sessions don't grow the list forever
+    const pools = this.list.filter((s) => s.kind === "pool");
+    if (pools.length > 24) {
+      const drop = pools[0];
+      this.list.splice(this.list.indexOf(drop), 1);
+    }
+  },
+
   violet(x, y) {
     this.list.push({
       x, y,
       vx: (Math.random() - 0.5) * 60, vy: -60 - Math.random() * 60,
       t: 0, life: 0.35 + Math.random() * 0.15, kind: "vmote",
     });
+  },
+
+  web(x, y) {
+    this.list.push({ x, y, t: 0, life: 0.20, kind: "webflash" });
+    for (let i = 0; i < 8; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = 60 + Math.random() * 180;
+      this.list.push({
+        x, y,
+        vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 40,
+        t: 0, life: 0.30 + Math.random() * 0.15, kind: "webstrand",
+      });
+    }
   },
 
   shadowburst(x, y) {
@@ -283,6 +320,20 @@ export const Sparks = {
         ctx.fillRect(x - r, y - 1, r * 2, 2);
         ctx.fillRect(x - 1, y - r, 2, r * 2);
         ctx.fillRect(x - 3, y - 3, 6, 6);
+      } else if (s.kind === "webflash") {
+        const r = Math.round(4 + s.t * 80);
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(x - r - 2, y - 1, r * 2 + 4, 2);
+        ctx.fillRect(x - 1, y - r - 2, 2, r * 2 + 4);
+        ctx.fillStyle = "#bff4ff";
+        ctx.fillRect(x - 3, y - 3, 6, 6);
+      } else if (s.kind === "webstrand") {
+        ctx.globalAlpha = Math.max(0, 1 - s.t / s.life);
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(x, y, 3, 1);
+        ctx.fillStyle = "#9fd4ff";
+        ctx.fillRect(x, y + 1, 2, 1);
+        ctx.globalAlpha = 1;
       } else if (s.kind === "slash") {
 
         const k = 1 - s.t / s.life;
@@ -321,6 +372,22 @@ export const Sparks = {
         ctx.globalAlpha = Math.max(0, 1 - s.t / s.life);
         ctx.fillStyle = "#c01414";
         ctx.fillRect(x, y, 2, 2);
+        ctx.globalAlpha = 1;
+      } else if (s.kind === "pool") {
+        // dried blood pool: dark crust + wet red core, seeps in then fades
+        const k = s.t / s.life;
+        const grow = Math.min(1, s.t / 0.4);
+        const wob = Math.sin((s.seed || 0) * 7);
+        const w = Math.round((16 + wob * 3) * grow);
+        const a = k > 0.7 ? Math.max(0, 1 - (k - 0.7) / 0.3) : 1;
+        ctx.globalAlpha = a;
+        ctx.fillStyle = "#4a080c";
+        ctx.fillRect(x - w, y - 2, w * 2, 4);
+        ctx.fillRect(x - Math.round(w * 0.6), y - 3, Math.round(w * 1.2), 6);
+        ctx.fillStyle = "#7a1016";
+        ctx.fillRect(x - Math.round(w * 0.7), y - 1, Math.round(w * 1.4), 2);
+        ctx.fillStyle = "#c01414";
+        ctx.fillRect(x - Math.round(w * 0.35), y - 1, Math.round(w * 0.7), 2);
         ctx.globalAlpha = 1;
       } else if (s.kind === "mote" || s.kind === "vmote" || s.kind === "smote") {
 
@@ -509,8 +576,42 @@ export const Bolts = {
   },
 };
 
-export const FlyingHammer = {
-  cur: null,
+export const WebLines = {
+  list: [],
+  shoot(x1, y1, x2, y2, life = 0.08) {
+    this.list.push({ x1, y1, x2, y2, t: 0, life });
+  },
+  update(dt) {
+    for (const l of this.list) l.t += dt;
+    this.list = this.list.filter((l) => l.t < l.life);
+  },
+  draw(ctx, camX) {
+    for (const l of this.list) {
+      const k = Math.max(0, 1 - l.t / l.life);
+      const x1 = Math.round(l.x1 - camX), y1 = Math.round(l.y1);
+      const x2 = Math.round(l.x2 - camX), y2 = Math.round(l.y2);
+      ctx.globalAlpha = 0.5 * k + 0.3;
+      ctx.fillStyle = "#9fd4ff";
+      const dx = x2 - x1, dy = y2 - y1;
+      const steps = Math.max(1, Math.round(Math.hypot(dx, dy) / 3));
+      for (let i = 0; i <= steps; i++) {
+        const px = Math.round(x1 + (dx * i) / steps);
+        const py = Math.round(y1 + (dy * i) / steps);
+        ctx.fillRect(px - 1, py - 1, 3, 3);
+      }
+      ctx.globalAlpha = 0.9 * k + 0.1;
+      ctx.fillStyle = "#ffffff";
+      for (let i = 0; i <= steps; i += 2) {
+        const px = Math.round(x1 + (dx * i) / steps);
+        const py = Math.round(y1 + (dy * i) / steps);
+        ctx.fillRect(px, py, 2, 2);
+      }
+      ctx.globalAlpha = 1;
+    }
+  },
+};
+
+export const FlyingHammer = {  cur: null,
   show(x, y, dir) { this.cur = { x, y, dir }; },
   hide() { this.cur = null; },
   draw(ctx, camX) {

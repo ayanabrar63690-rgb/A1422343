@@ -12,7 +12,9 @@ const EDGE = Object.freeze({
   wolverine: Object.freeze({ wesker: 0, homelander: -1, wolverine: 0, hulk: -2, ironman: 1, thor: 0, uroboros: 0 }),
   hulk: Object.freeze({ wesker: 2, homelander: 1, wolverine: 2, hulk: 0, ironman: -2, thor: 0, uroboros: 0 }),
   ironman: Object.freeze({ wesker: -2, homelander: 1, wolverine: -1, hulk: 2, ironman: 0, thor: -1, uroboros: 0 }),
-  thor: Object.freeze({ wesker: -1, homelander: 1, wolverine: 0, hulk: 0, ironman: 1, thor: 0, uroboros: 0 }),
+  thor: Object.freeze({ wesker: -1, homelander: 1, wolverine: 0, hulk: 0, ironman: 1, thor: 0, uroboros: 0, doom: 0 }),
+  doom: Object.freeze({ wesker: 0, homelander: 1, wolverine: 0, hulk: 1, ironman: 0, thor: 0, uroboros: 0, doom: 0 }),
+  spiderman: Object.freeze({ wesker: 0, homelander: 1, wolverine: 0, hulk: 1, ironman: 0, thor: 0, uroboros: 0 }),
   uroboros: Object.freeze({ wesker: 0, homelander: 0, wolverine: 0, hulk: 0, ironman: 0, thor: 0, uroboros: 0 }),
 });
 

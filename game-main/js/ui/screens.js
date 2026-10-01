@@ -15,7 +15,7 @@ function show(id) {
 
 const MAP_HINT_DEFAULT = "Pick a stage to enter the scene.";
 
-const ROSTER_ORDER = ["wesker", "homelander", "wolverine", "hulk", "ironman", "thor", "uroboros"];
+const ROSTER_ORDER = ["wesker", "homelander", "wolverine", "hulk", "ironman", "thor", "spiderman", "doom", "uroboros"];
 let draftSide = 1;
 
 export function visibleRoster() {

@@ -82,6 +82,34 @@ export const CHARACTERS = Object.freeze({
       health: 1.15,
     }),
   }),
+  spiderman: Object.freeze({
+    id: "spiderman",
+    name: "SPIDER-MAN",
+    title: "Web-Head",
+    desc: "Red mask • web-shooters • aerial trickster",
+    accent: "#ff3b3b",
+
+    stats: Object.freeze({
+      attackSpeed: 1.15,
+      moveSpeed: 1.05,
+      damage: 0.50,
+      health: 0.95,
+    }),
+  }),
+  doom: Object.freeze({
+    id: "doom",
+    name: "DR. DOOM",
+    title: "Monarch of Latveria",
+    desc: "Steel mask • green cloak • plasma + missiles",
+    accent: "#2fae5a",
+
+    stats: Object.freeze({
+      attackSpeed: 1.00,
+      moveSpeed: 0.90,
+      damage: 1.05,
+      health: 1.15,
+    }),
+  }),
   uroboros: Object.freeze({
     id: "uroboros",
     name: "UROBOROS",

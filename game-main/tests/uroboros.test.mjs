@@ -23,7 +23,9 @@ assert.strictEqual(data.UROBOROS_BASE.light1.chainTo, "light2");
 assert.strictEqual(data.UROBOROS_BASE.light2.chainTo, "light3");
 assert.strictEqual(data.UROBOROS_BASE.light3.level, "low");
 assert.strictEqual(data.UROBOROS_BASE.heavy.level, "high");
-assert.ok(data.UROBOROS_BASE.light1.hit.w >= 90, "tentacle reach beats hulk 84+");
+assert.ok(data.UROBOROS_BASE.light1.hit.w >= 110, "tentacle reach beats everything");
+assert.ok(data.UROBOROS_BASE.heavy.hit.w >= 120, "heavy slam longest normal");
+assert.ok(data.UROBOROS_BASE.light1.hit.w > data.HULK_BASE.light1.hit.w, "outreaches hulk");
 
 const mv = data.movesFor("uroboros");
 const chain = mv.light1.damage + mv.light2.damage + mv.light3.damage;
@@ -89,8 +91,16 @@ for (const k of ["light1", "light2", "light3", "heavy", "crouchLight", "airLight
 
 // --- fighter wiring (source-level) ---
 const fighterSrc = readFileSync(new URL("../js/characters/fighter.js", import.meta.url), "utf8");
-for (const s of ["tryUroborosSpecial", 'jaguar: "wrap"', 'phantom: "rock"', "applyDecay", "UROBOROS_REGEN", "uroboros: 1.32", "this.vuln = false"]) {
+for (const s of ["tryUroborosSpecial", 'jaguar: "wrap"', 'phantom: "rock"', "applyDecay", "UROBOROS_REGEN", "uroboros: 1.32", "this.vuln = false", "goreMarks", "drawGore", "Sparks.gore"]) {
   assert.ok(fighterSrc.includes(s), `fighter.js has ${s}`);
+}
+// --- gore + mutation wiring (source-level) ---
+const effectsSrc = readFileSync(new URL("../js/effects.js", import.meta.url), "utf8");
+for (const s of ["gore(x, y)", "pool(x, y)", '"pool"']) {
+  assert.ok(effectsSrc.includes(s), `effects.js has ${s}`);
+}
+for (const flag of ["chest-maw", "lash", "impale", "coil"]) {
+  assert.ok(spritesSrc.includes(flag), `mutation flag ${flag}`);
 }
 assert.ok(!/tryShadow[\s\S]{0,80}uroboros/.test(fighterSrc), "no shadow path for uroboros");
 assert.ok(!/trySamuraiEdge[\s\S]{0,80}uroboros/.test(fighterSrc), "no samurai edge for uroboros");

@@ -53,6 +53,9 @@ function isGuarding(def, att, move) {
 
 export function resolveStrike(att, def, move, boxOverride = null) {
   if (att === def || def.hp <= 0 || def.invulnT > 0) return null;
+  // Sky blasts (lobbed missiles, orbital beams) are slipped by dashing in
+  // any direction — the dash carries through the impact frame.
+  if (move.sky && (def.state === "DASH" || def.state === "BACKDASH")) return null;
   const box = boxOverride || hitboxOf(att, move);
   if (!overlap(box, hurtboxOf(def))) return null;
 

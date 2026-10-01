@@ -316,45 +316,169 @@ export const THOR_BASE = Object.freeze({
 export const UROBOROS_BASE = Object.freeze({
   light1: base({
     startup: 0.12, active: 0.08, recovery: 0.20, damage: 8,
-    hitstun: 0.42, hitstop: 0.07, knockback: 320, lunge: 26, chainTo: "light2",
+    hitstun: 0.42, hitstop: 0.07, knockback: 320, lunge: 34, chainTo: "light2",
     blockstun: 0.26, blockPush: 360,
-    hit: Object.freeze({ w: 92, top: 120, h: 74 }),
+    hit: Object.freeze({ w: 112, top: 120, h: 74 }),
   }),
   light2: base({
     startup: 0.14, active: 0.08, recovery: 0.22, damage: 9,
-    hitstun: 0.46, hitstop: 0.07, knockback: 360, lunge: 28, chainTo: "light3",
+    hitstun: 0.46, hitstop: 0.07, knockback: 360, lunge: 36, chainTo: "light3",
     blockstun: 0.28, blockPush: 380,
-    hit: Object.freeze({ w: 92, top: 120, h: 74 }),
+    hit: Object.freeze({ w: 114, top: 120, h: 74 }),
   }),
   light3: base({
     startup: 0.16, active: 0.09, recovery: 0.30, damage: 11,
-    hitstun: 0.52, hitstop: 0.08, knockback: 460, lunge: 28,
+    hitstun: 0.52, hitstop: 0.08, knockback: 460, lunge: 36,
     level: "low", blockstun: 0.32, blockPush: 440,
-    hit: Object.freeze({ w: 94, top: 64, h: 54 }),
+    hit: Object.freeze({ w: 116, top: 64, h: 54 }),
   }),
   heavy: base({
     startup: 0.26, active: 0.09, recovery: 0.42, damage: 16,
-    hitstun: 0.66, hitstop: 0.12, knockback: 720, lunge: 44,
+    hitstun: 0.66, hitstop: 0.12, knockback: 720, lunge: 54,
     level: "high", blockstun: 0.55, blockPush: 640,
-    hit: Object.freeze({ w: 96, top: 130, h: 84 }),
+    hit: Object.freeze({ w: 126, top: 130, h: 84 }),
   }),
   crouchLight: base({
     startup: 0.13, active: 0.08, recovery: 0.24, damage: 8,
-    hitstun: 0.42, hitstop: 0.06, knockback: 340, lunge: 20,
+    hitstun: 0.42, hitstop: 0.06, knockback: 340, lunge: 28,
     level: "low", blockstun: 0.26, blockPush: 360,
-    hit: Object.freeze({ w: 90, top: 64, h: 54 }),
+    hit: Object.freeze({ w: 110, top: 64, h: 54 }),
   }),
   airLight: base({
     startup: 0.13, active: 0.10, recovery: 0.24, damage: 8,
-    hitstun: 0.42, hitstop: 0.06, knockback: 340, lunge: 30,
+    hitstun: 0.42, hitstop: 0.06, knockback: 340, lunge: 36,
     level: "mid", blockstun: 0.26, blockPush: 360,
-    hit: Object.freeze({ w: 88, top: 125, h: 76 }),
+    hit: Object.freeze({ w: 108, top: 125, h: 76 }),
   }),
   airHeavy: base({
     startup: 0.20, active: 0.10, recovery: 0.34, damage: 13,
-    hitstun: 0.62, hitstop: 0.10, knockback: 600, lunge: 40,
+    hitstun: 0.62, hitstop: 0.10, knockback: 600, lunge: 48,
     level: "mid", blockstun: 0.38, blockPush: 520,
-    hit: Object.freeze({ w: 94, top: 135, h: 86 }),
+    hit: Object.freeze({ w: 118, top: 135, h: 86 }),
+  }),
+});
+
+export const SPIDERMAN_BASE = Object.freeze({
+  light1: base({
+    startup: 0.09, active: 0.07, recovery: 0.14, damage: 5,
+    hitstun: 0.32, hitstop: 0.05, knockback: 240, lunge: 24, chainTo: "light2",
+    blockstun: 0.20, blockPush: 280,
+    hit: Object.freeze({ w: 68, top: 120, h: 68 }),
+  }),
+  light2: base({
+    startup: 0.11, active: 0.07, recovery: 0.16, damage: 6,
+    hitstun: 0.36, hitstop: 0.06, knockback: 280, lunge: 26, chainTo: "light3",
+    blockstun: 0.22, blockPush: 320,
+    hit: Object.freeze({ w: 70, top: 120, h: 68 }),
+  }),
+  light3: base({
+    startup: 0.14, active: 0.09, recovery: 0.26, damage: 8,
+    hitstun: 0.46, hitstop: 0.07, knockback: 420, lunge: 28,
+    level: "low", blockstun: 0.28, blockPush: 400,
+    hit: Object.freeze({ w: 72, top: 64, h: 52 }),
+  }),
+  heavy: base({
+    startup: 0.20, active: 0.08, recovery: 0.36, damage: 12,
+    hitstun: 0.58, hitstop: 0.10, knockback: 620, lunge: 42,
+    level: "high", blockstun: 0.45, blockPush: 560,
+    hit: Object.freeze({ w: 80, top: 130, h: 80 }),
+  }),
+  crouchLight: base({
+    startup: 0.11, active: 0.08, recovery: 0.20, damage: 5,
+    hitstun: 0.34, hitstop: 0.05, knockback: 280, lunge: 20,
+    level: "low", blockstun: 0.22, blockPush: 320,
+    hit: Object.freeze({ w: 70, top: 64, h: 52 }),
+  }),
+  airLight: base({
+    startup: 0.09, active: 0.10, recovery: 0.18, damage: 6,
+    hitstun: 0.36, hitstop: 0.05, knockback: 300, lunge: 34,
+    level: "mid", blockstun: 0.22, blockPush: 320,
+    hit: Object.freeze({ w: 70, top: 125, h: 75 }),
+  }),
+  airHeavy: base({
+    startup: 0.15, active: 0.10, recovery: 0.28, damage: 10,
+    hitstun: 0.54, hitstop: 0.09, knockback: 520, lunge: 44,
+    level: "mid", blockstun: 0.32, blockPush: 460,
+    hit: Object.freeze({ w: 78, top: 135, h: 85 }),
+  }),
+});
+
+export const DOOM_BASE = Object.freeze({
+  light1: base({
+    startup: 0.10, active: 0.07, recovery: 0.16, damage: 5,
+    hitstun: 0.34, hitstop: 0.05, knockback: 260, lunge: 24, chainTo: "light2",
+    blockstun: 0.22, blockPush: 300,
+    hit: Object.freeze({ w: 76, top: 120, h: 70 }),
+  }),
+  light2: base({
+    startup: 0.12, active: 0.07, recovery: 0.18, damage: 6,
+    hitstun: 0.38, hitstop: 0.06, knockback: 300, lunge: 26, chainTo: "light3",
+    blockstun: 0.24, blockPush: 340,
+    hit: Object.freeze({ w: 78, top: 120, h: 70 }),
+  }),
+  light3: base({
+    startup: 0.14, active: 0.09, recovery: 0.28, damage: 8,
+    hitstun: 0.48, hitstop: 0.07, knockback: 420, lunge: 28,
+    level: "low", blockstun: 0.30, blockPush: 420,
+    hit: Object.freeze({ w: 80, top: 64, h: 52 }),
+  }),
+  heavy: base({
+    startup: 0.22, active: 0.08, recovery: 0.38, damage: 13,
+    hitstun: 0.60, hitstop: 0.10, knockback: 640, lunge: 40,
+    level: "high", blockstun: 0.48, blockPush: 580,
+    hit: Object.freeze({ w: 84, top: 130, h: 80 }),
+  }),
+  crouchLight: base({
+    startup: 0.11, active: 0.08, recovery: 0.20, damage: 5,
+    hitstun: 0.34, hitstop: 0.05, knockback: 280, lunge: 20,
+    level: "low", blockstun: 0.22, blockPush: 320,
+    hit: Object.freeze({ w: 76, top: 64, h: 52 }),
+  }),
+  airLight: base({
+    startup: 0.10, active: 0.10, recovery: 0.20, damage: 6,
+    hitstun: 0.36, hitstop: 0.05, knockback: 320, lunge: 32,
+    level: "mid", blockstun: 0.24, blockPush: 340,
+    hit: Object.freeze({ w: 76, top: 125, h: 75 }),
+  }),
+  airHeavy: base({
+    startup: 0.16, active: 0.12, recovery: 0.30, damage: 11,
+    hitstun: 0.56, hitstop: 0.09, knockback: 560, lunge: 44,
+    level: "mid", blockstun: 0.40, blockPush: 540,
+    hit: Object.freeze({ w: 84, top: 135, h: 85 }),
+  }),
+  photon: base({
+    startup: 0.14, active: 0.06, recovery: 0.55, damage: 6,
+    hitstun: 0.40, hitstop: 0.06, knockback: 340, lunge: 0,
+    level: "mid", blockstun: 0.26, blockPush: 360, chip: 1, heat: true,
+    ray: Object.freeze({ len: 450, top: 122, h: 44 }),
+  }),
+  snap: base({
+    startup: 0.14, active: 0.06, recovery: 0.30, damage: 2.75,
+    hitstun: 0.40, hitstop: 0.06, knockback: 380, lunge: 0,
+    level: "mid", blockstun: 0.22, blockPush: 360, chip: 1, heat: true,
+    hit: Object.freeze({ w: 0, top: 0, h: 0 }),
+  }),
+});
+
+export const DOOM_SPECIALS = Object.freeze({
+  beam: Object.freeze({
+    cost: 1, maxRange: 700,
+    startup: 0.28, fire: 0.14, recover: 0.40,
+    damage: 16, chip: 4, hitstun: 0.50, hitstop: 0.08, knockback: 450,
+    blockstun: 0.35, blockPush: 480, level: "mid",
+    rayTop: 115, rayH: 90, rayLen: 650,
+  }),
+  stack: Object.freeze({
+    costPts: 50, maxRange: 650,
+    startup: 0.30, volleys: 4, volleyTime: 0.09, gapTime: 0.10, recover: 0.40,
+    damage: 5, chip: 1, hitstun: 0.35, hitstop: 0.05, knockback: 320,
+    blockstun: 0.24, blockPush: 340,
+    rayTop: 115, rayH: 120, rayLen: 600,
+  }),
+  throne: Object.freeze({
+    cost: 3, maxRange: 700,
+    summon: 0.60, barrage: 2.00, meteorFall: 0.50, recover: 0.45,
+    beamTicks: 5, beamDmg: 3, meteorDmg: 20, downTime: 1.00,
   }),
 });
 
@@ -364,6 +488,8 @@ export function movesFor(kind) {
     : kind === "hulk" ? HULK_BASE
     : kind === "ironman" ? IRONMAN_BASE
     : kind === "thor" ? THOR_BASE
+    : kind === "spiderman" ? SPIDERMAN_BASE
+    : kind === "doom" ? DOOM_BASE
     : kind === "uroboros" ? UROBOROS_BASE : WESKER_BASE;
   const st = CHARACTERS[kind].stats;
   const out = {};
@@ -451,6 +577,28 @@ export const FRAME_FOR = Object.freeze({
     crouchLight: Object.freeze({ startup: 4, active: 46, recovery: 46 }),
     airLight: Object.freeze({ startup: 4, active: 44, recovery: 44 }),
     airHeavy: Object.freeze({ startup: 4, active: 47, recovery: 47 }),
+  }),
+
+  spiderman: Object.freeze({
+    light1: Object.freeze({ startup: 54, active: 55, recovery: 55 }),
+    light2: Object.freeze({ startup: 54, active: 56, recovery: 55 }),
+    light3: Object.freeze({ startup: 54, active: 57, recovery: 57 }),
+    heavy: Object.freeze({ startup: 54, active: 58, recovery: 55 }),
+    crouchLight: Object.freeze({ startup: 54, active: 57, recovery: 57 }),
+    airLight: Object.freeze({ startup: 59, active: 59, recovery: 56 }),
+    airHeavy: Object.freeze({ startup: 60, active: 60, recovery: 58 }),
+  }),
+
+  doom: Object.freeze({
+    light1: Object.freeze({ startup: 62, active: 63, recovery: 63 }),
+    light2: Object.freeze({ startup: 62, active: 64, recovery: 63 }),
+    light3: Object.freeze({ startup: 62, active: 64, recovery: 64 }),
+    heavy: Object.freeze({ startup: 62, active: 65, recovery: 63 }),
+    photon: Object.freeze({ startup: 62, active: 67, recovery: 67 }),
+    snap: Object.freeze({ startup: 62, active: 68, recovery: 68 }),
+    crouchLight: Object.freeze({ startup: 62, active: 64, recovery: 64 }),
+    airLight: Object.freeze({ startup: 69, active: 69, recovery: 63 }),
+    airHeavy: Object.freeze({ startup: 69, active: 66, recovery: 63 }),
   }),
 });
 
@@ -661,14 +809,52 @@ export const UROBOROS_SPECIALS = Object.freeze({
     zone: Object.freeze({ w: 170, h: 200, reach: 150 }),
   }),
   impale: Object.freeze({
-    cost: 3, maxRange: 480,
-    startup: 0.30, pierceTime: 0.25, recover: 0.50,
-    range: 150, lunge: 30,
+    cost: 3, maxRange: 650,
+    startup: 0.55, pullTime: 0.40, pierceTime: 1.25, slamTime: 0.25, recover: 0.60,
+    range: 220, pullRange: 520, lunge: 0,
     pierce: 10, pierceStun: 0.60, pierceStop: 0.14, pierceKnock: 200,
+    tickDmg: 5, ticks: 5, finale: 18, finaleStun: 0.80, finaleKnock: 750,
+  }),
+});
+
+export const SPIDERMAN_SPECIALS = Object.freeze({
+  webshot: Object.freeze({
+    cost: 1, maxRange: 550,
+    startup: 0.18, fire: 0.12, recover: 0.28,
+    damage: 8, chip: 2, hitstun: 0.35, hitstop: 0.06, knockback: 300,
+    blockstun: 0.22, blockPush: 320, level: "mid",
+    webRoot: 0.7,
+    rayTop: 122, rayH: 44, rayLen: 500,
+  }),
+  yank: Object.freeze({
+    cost: 2, maxRange: 420,
+    startup: 0.20, carry: 0.22, tossTime: 0.15, recover: 0.40,
+    range: 220, lunge: 30,
+    damage: 14, chip: 0, hitstun: 0.55, hitstop: 0.09, knockback: 550,
+    blockstun: 0, blockPush: 0,
+  }),
+  maelstrom: Object.freeze({
+    cost: 3, maxRange: 450,
+    transform: 0.80, strikeTime: 0.10, gapTime: 0.12,
+    recoverAbort: 0.35, recover: 0.45,
+    frames: Object.freeze([55, 56, 59, 57, 60, 58]),
+    sides: Object.freeze([1, -1, 1, -1, 1, -1]),
+    hit: Object.freeze({ w: 72, top: 125, h: 75 }),
+    frenzy: Object.freeze({ damage: 5, stun: 0.32, knock: 120, stop: 0.04, chip: 1 }),
+    finale: 12, finaleStun: 0.70, finaleKnock: 600, finaleLaunch: 350,
+  }),
+  zip: Object.freeze({
+    costPts: 50, maxRange: 9999,
+    crouch: 0.06, swing: 0.22, reform: 0.12, dist: 280, cooldown: 0.60,
+  }),
+  swing: Object.freeze({
+    cooldown: 0.90, shoot: 0.08, swing: 0.45, travel: 220, dip: 70,
   }),
 });
 
 export const REGEN = Object.freeze({ delay: 2.5, rate: 2.0 });
+
+export const WESKER_REGEN = Object.freeze({ delay: 4.0, rate: 0.5 });
 
 export const UROBOROS_REGEN = Object.freeze({ delay: 3.5, rate: 1.0 });
 

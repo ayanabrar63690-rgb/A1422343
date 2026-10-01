@@ -98,5 +98,14 @@ export const AudioFX = {
     this.slide(1600, 200, 0.18, 0.10, "sawtooth");
     this.tone(60, 0.25, 0.12, "sine");
   },
+
+  thwip() {
+    this.slide(900, 2400, 0.09, 0.08, "square");
+    this.tone(3200, 0.04, 0.04, "square");
+  },
+  snap() {
+    this.tone(2400, 0.03, 0.10, "square");
+    this.tone(1200, 0.05, 0.08, "square");
+  },
 };
 

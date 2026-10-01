@@ -1,6 +1,7 @@
 import { CHARACTERS } from "./characters/data.js";
 import { BASE_HP, RAGE } from "./combat/data.js";
 import { arena } from "./arena.js";
+import { Missiles } from "./effects.js";
 
 export const AI_PROFILE = Object.freeze({
   wesker: Object.freeze({
@@ -45,6 +46,20 @@ export const AI_PROFILE = Object.freeze({
     heavyMix: true,
     approach: null,
   }),
+  doom: Object.freeze({
+    retreatGap: 170,
+    poke: Object.freeze({ min: 150, max: 280, move: "heavy", p: 0.14, easyP: 0.03 }),
+    reach: Object.freeze({ min: 150, max: 260 }),
+    heavyMix: true,
+    approach: Object.freeze({ tool: "photon", min: 220, max: 520, medium: 0.12, extreme: 0.12 }),
+  }),
+  spiderman: Object.freeze({
+    retreatGap: 140,
+    poke: Object.freeze({ min: 130, max: 260, move: "heavy", p: 0.13, easyP: 0.03 }),
+    reach: Object.freeze({ min: 150, max: 260 }),
+    heavyMix: true,
+    approach: Object.freeze({ tool: "zip", min: 220, max: 520, medium: 0.05, extreme: 0.12 }),
+  }),
   uroboros: Object.freeze({
     retreatGap: 0,
     poke: Object.freeze({ min: 150, max: 300, move: "heavy", p: 0.15, easyP: 0.03 }),
@@ -60,6 +75,13 @@ const LINK = Object.freeze({ easy: 0.4, medium: 0.8, extreme: 1.0 });
 const GUARD = Object.freeze({ easy: 0.30, medium: 0.65, extreme: 0.93 });
 
 const BUSY = Object.freeze(["GRAB", "THROWN", "HITSTUN", "KDOWN", "KO", "SPECIAL"]);
+
+// Missile-dodge read rate per difficulty (rest is a clean miss).
+const MISSILE_DODGE = Object.freeze({ easy: 0.20, medium: 0.55, extreme: 0.985 });
+
+// Nobody reacts on launch frame: the missile must be this old (seconds)
+// before each brain even acknowledges it.
+const MISSILE_REACT = Object.freeze({ easy: 0.28, medium: 0.15, extreme: 0.08 });
 
 function rayActiveNow(foe) {
   return (foe.state === "ATTACK" && foe.attackMove && foe.attackMove.ray) ||
@@ -84,6 +106,7 @@ export class AIController {
     this.jumpCD = 0;
     this.specialCD = 0;
     this.blitzCD = 0;
+    this.fleeCD = 0;
     this.foeGuardStreak = 0;
     this.foeRayStreak = 0;
     this.foeAirStreak = 0;
@@ -110,6 +133,7 @@ export class AIController {
     this.jumpCD -= dt;
     this.specialCD -= dt;
     this.blitzCD -= dt;
+    this.fleeCD -= dt;
     if (foe.state === "BLOCK") this.foeGuardStreak += dt;
     else this.foeGuardStreak = 0;
 
@@ -149,6 +173,8 @@ export class AIController {
     }
 
     if (this.matchup(me, foe, gap, toFoe, R)) return;
+
+    if (this.missileDodge(me, R)) return;
 
     const foeRay = (foe.state === "ATTACK" && foe.phase === "startup" && foe.grounded &&
       foe.attackMove && foe.attackMove.ray) ? "poke"
@@ -288,11 +314,20 @@ export class AIController {
           me.grounded && gap > prof.approach.min && gap < prof.approach.max &&
           R() < (this.diff === "easy" ? 0.02 : 0.12)) {
           me.tryRepulsor();
+        } else if (prof.approach && prof.approach.tool === "zip" && typeof me.tryWebZip === "function" &&
+          (me.state === "IDLE" || me.state === "WALK") &&
+          gap > prof.approach.min && gap < prof.approach.max &&
+          R() < (this.diff === "easy" ? 0.0 : this.diff === "medium" ? prof.approach.medium : prof.approach.extreme)) {
+          me.tryWebZip(toFoe);
         } else if (prof.approach && prof.approach.tool === "shadow" && typeof me.tryShadow === "function" &&
           (me.state === "IDLE" || me.state === "WALK") && me.grounded &&
           gap > prof.approach.min && gap < prof.approach.max &&
           R() < (this.diff === "easy" ? 0.0 : this.diff === "medium" ? prof.approach.medium : prof.approach.extreme)) {
           me.tryShadow(toFoe);
+        } else if (prof.approach && prof.approach.tool === "photon" && typeof me.tryPhoton === "function" &&
+          me.grounded && gap > prof.approach.min && gap < prof.approach.max &&
+          R() < (this.diff === "easy" ? 0.02 : 0.12)) {
+          me.tryPhoton();
         } else if (prof.poke && gap < prof.poke.max && gap > prof.poke.min &&
           (prof.poke.move !== "dash" || this.dashCD <= 0) &&
           R() < (this.diff === "easy" ? prof.poke.easyP : prof.poke.p)) {
@@ -354,6 +389,49 @@ export class AIController {
     if (mix < 0.12 && gap < 100) me.pressGrab();
     else if (mix < 0.22 && P.heavyMix) me.pressHeavy();
     else me.pressLight();
+  }
+
+  missileDodge(me, R) {
+    if (!me.grounded) { this.fleeCD = 0; return false; }
+    // Sky blasts are slipped by a dash overlapping impact (dash lasts
+    // 0.18s), so: sprint early for distance, dash late for the slip.
+    // Dashing on sight would end long before the 0.5s missile lands.
+    const DASH_AT = 0.17;
+    let tx = null, best = Infinity;
+    const radius = this.fleeCD > 0 ? 400 : 150;
+    const react = MISSILE_REACT[this.diff] ?? 0.15;
+    for (const m of Missiles.list) {
+      const tti = m.fall - m.t;
+      if (!(tti > 0 && tti <= 0.55)) continue;
+      if (m.t < react) continue;
+      if (Math.abs(m.tx - me.x) > radius) continue;
+      if (tti < best) { best = tti; tx = m.tx; }
+    }
+    if (tx === null) { this.fleeCD = 0; return false; }
+    const dir = me.x >= tx ? 1 : -1;
+    this.fleeCD = 0.7;
+    if (best > DASH_AT) {
+      this.order = { move: dir, crouch: false, guard: false };
+      return true;
+    }
+    if (this.dashCD <= 0) {
+      if (me.kind === "wesker" && typeof me.tryShadow === "function" &&
+        this.blitzCD <= 0 && R() < 0.5) {
+        me.tryShadow(dir);
+        this.blitzCD = 2.5;
+        this.order = { move: 0, crouch: false, guard: false };
+        return true;
+      }
+      if (["IDLE", "WALK", "SNEAK", "CROUCH", "BLOCK"].includes(me.state)) {
+        const rate = MISSILE_DODGE[this.diff] ?? 0.55;
+        if (R() < rate) {
+          me.queueDash(dir);
+          this.dashCD = 1.0;
+        }
+      }
+    }
+    this.order = { move: dir, crouch: false, guard: false };
+    return true;
   }
 
   matchup(me, foe, gap, toFoe, R) {
