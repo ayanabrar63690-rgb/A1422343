@@ -1,4 +1,6 @@
-export const CHARACTERS = Object.freeze({
+// Not frozen at the top level: players can register custom fighters at
+// runtime (js/characters/custom.js). Entries themselves stay frozen.
+export const CHARACTERS = {
   wesker: Object.freeze({
     id: "wesker",
     name: "WESKER",
@@ -140,5 +142,18 @@ export const CHARACTERS = Object.freeze({
       health: 1.45,
     }),
   }),
-});
+};
+
+// Custom fighters carry their full build data under `custom` so the
+// sprite/specials systems can reconstruct art and abilities per fighter.
+export function registerCharacter(def) {
+  CHARACTERS[def.id] = Object.freeze({
+    title: "",
+    desc: "",
+    accent: "#ffffff",
+    hidden: false,
+    ...def,
+  });
+  return CHARACTERS[def.id];
+}
 

@@ -621,6 +621,7 @@ export const PlasmaOrbs = {
       x: ox, y: oy,
       travelled: 0,
       hit: false,
+      nebula: !!opts.nebula,
     });
   },
   clear() { this.list.length = 0; },
@@ -646,6 +647,40 @@ export const PlasmaOrbs = {
       const x = Math.round(o.x - camX), y = Math.round(o.y);
       const k = Math.min(1, o.t / o.life);
       const r = o.r * (1 + k * 0.35);
+      if (o.nebula) {
+        // nebula plasma ball: soft violet/blue/magenta gas instead of fire
+        ctx.globalAlpha = 0.32 * (1 - k * 0.4);
+        ctx.fillStyle = "#8a5aff";
+        ctx.beginPath();
+        ctx.arc(x, y, r * 2.1, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 0.5;
+        ctx.fillStyle = "#4f8dff";
+        ctx.beginPath();
+        ctx.arc(x - r * 0.35, y + r * 0.2, r * 1.15, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#ff6fd8";
+        ctx.beginPath();
+        ctx.arc(x + r * 0.3, y - r * 0.25, r * 0.95, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 0.9;
+        ctx.fillStyle = "#2a1060";
+        ctx.beginPath();
+        ctx.arc(x, y, r * 0.8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = "#d8c8ff";
+        ctx.beginPath();
+        ctx.arc(x - r * 0.2, y - r * 0.2, r * 0.3, 0, Math.PI * 2);
+        ctx.fill();
+        // orbiting dust flecks for the nebula swirl
+        for (let i = 0; i < 3; i++) {
+          const a = o.ang + i * (Math.PI * 2 / 3);
+          ctx.fillStyle = i % 2 ? "#c07bff" : "#7ab8ff";
+          ctx.fillRect(Math.round(x + Math.cos(a) * r * 1.4), Math.round(y + Math.sin(a) * r * 1.1), 2, 2);
+        }
+        continue;
+      }
       ctx.globalAlpha = 0.5 * (1 - k * 0.5);
       ctx.fillStyle = "#ff5a2a";
       ctx.beginPath();

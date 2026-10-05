@@ -10,15 +10,19 @@ import { Hitstop, hurtboxOf, hitboxOf } from "./combat/combat.js";
 import { RAGE } from "./combat/data.js";
 import { Particles, drawShadow, Sparks, Clones, Beams, Missiles, Bolts, FlyingHammer, WebLines, Flash, PlasmaOrbs, Portals } from "./effects.js";
 import { doomBotTarget, updateDoomBots, updateDoomBarrageOrbs } from "./combat/specials.js";
+import { updateCustomOrbs } from "./combat/customSpecials.js";
 import { initScreens } from "./ui/screens.js";
 import { pushCode, isUroborosUnlocked, unlockUroboros, pushCheatCode, isCheatWeskerUnlocked, unlockCheatWesker } from "./ui/unlock.js";
 import { buildPortrait } from "./render/sprites.js";
 import { CHARACTERS } from "./characters/data.js";
 import { AudioFX } from "./audio.js";
 import { connectNet, relayURL, lastNetIP, saveNetIP } from "./net/client.js";
-import { setUroborosBanned, isUroborosBanned } from "./net/gate.js";
+import { setUroborosBanned, isUroborosBanned, setCustomsBanned } from "./net/gate.js";
+import { loadCustoms, isCustomKind } from "./characters/custom.js";
+import { initCreate } from "./ui/create.js";
 import { snapFighter, applyFighter, frameOf, frameFor, armSfxCapture, injectFighterFactory } from "./net/sync.js";
 injectFighterFactory((kind, x, y) => new Fighter(kind, x, y), GROUND_Y);
+loadCustoms();
 import { createMatch, activeKind, benchKinds, onKO, awardRound, timeoutWinner, tagTarget, saveSlot, loadSlot, ROUND_TIME } from "./match.js";
 
 const canvas = document.getElementById("game");
@@ -78,9 +82,10 @@ function netStatus(txt) {
 // repaint has to follow the gate in both directions.
 function applyLanGate(banned) {
   setUroborosBanned(banned);
+  setCustomsBanned(banned);
   if (banned) {
-    sel.p1 = sel.p1.map((k) => (k === "uroboros" ? "wesker" : k));
-    sel.p2 = sel.p2.map((k) => (k === "uroboros" ? "homelander" : k));
+    sel.p1 = sel.p1.map((k) => (k === "uroboros" ? "wesker" : isCustomKind(k) ? "wesker" : k));
+    sel.p2 = sel.p2.map((k) => (k === "uroboros" ? "homelander" : isCustomKind(k) ? "homelander" : k));
   }
   screens.paintDraft();
   showUroborosHowto();
@@ -420,6 +425,14 @@ const screens = initScreens(sel, {
     const ids = Object.keys(MAPS);
     const next = ids[(ids.indexOf(map.id) + 1) % ids.length];
     enterFight(next);
+  },
+});
+
+initCreate({
+  onCreated: () => {
+    screens.paintDraft();
+    screens.show("screen-char");
+    state = STATE.CHAR_SELECT;
   },
 });
 
@@ -823,6 +836,8 @@ function hostTick(dt) {
       // plasma barrage orbs resolve on their own, not inside the special tick
       if (p1.kind === "doom") updateDoomBarrageOrbs(p1, p2, simDt);
       if (p2.kind === "doom") updateDoomBarrageOrbs(p2, p1, simDt);
+      if (isCustomKind(p1.kind)) updateCustomOrbs(p1, p2);
+      if (isCustomKind(p2.kind)) updateCustomOrbs(p2, p1);
 
       const clinch =
         p1.state === FState.GRAB || p2.state === FState.GRAB ||

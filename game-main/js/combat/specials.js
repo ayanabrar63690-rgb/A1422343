@@ -2512,6 +2512,7 @@ export function updateDoomBarrageOrbs(f, foe, dt) {
   const spec = DOOM_SPECIALS.barrage;
   for (const o of PlasmaOrbs.list) {
     if (o.done) continue;
+    if (o.nebula) continue; // custom nebula orbs resolve in their own flight loop
     if (foe.hp <= 0 || foe.invulnT > 0) continue;
     if (o.travelled > spec.farDist) {
       o.done = true;

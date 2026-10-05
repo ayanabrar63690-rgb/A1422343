@@ -1,10 +1,12 @@
 import { SPRITE_SCALE, MOVE, GROUND_Y, SETTINGS } from "../config.js";
 import { buildSprites, FEET_PAD } from "../render/sprites.js";
 import { flipped } from "../render/pixel.js";
+import { isCustomKind } from "../characters/custom.js";
 import { integrateAir, clampArena } from "../physics.js";
 import { BASE_HP, FRAME_FOR, movesFor, GRAB, RAGE, REGEN, WESKER_REGEN, UROBOROS_REGEN, BLEED, DECAY, SPIDERMAN_SPECIALS } from "../combat/data.js";
 import { resolveStrike, grabCheck, vulnMult } from "../combat/combat.js";
 import { tryWeskerSpecial, tryHomelanderSpecial, tryWolverineSpecial, tryWeskerShadow, tryHulkSpecial, tryIronmanSpecial, tryThorSpecial, tryUroborosSpecial, trySpidermanSpecial, trySpidermanZip, trySpidermanSwing, tryDoomSpecial, tryDoomPhoton, tryDoomSnap, tryDoomBot, tryDoomBarrage, updateSpecial } from "../combat/specials.js";
+import { tryCustomSpecial, updateCustomSpecial } from "../combat/customSpecials.js";
 import { AudioFX } from "../audio.js";
 import { Sparks } from "../effects.js";
 import { CHARACTERS } from "./data.js";
@@ -401,6 +403,7 @@ export class Fighter {
     // Doom is away in the portal while his clone fights: no inputs at all.
     if (this.away) return false;
     if ((this.kind === "wesker" || this.kind === "cheatwesker")) return tryWeskerSpecial(this, id, foe);
+    if (isCustomKind(this.kind)) return tryCustomSpecial(this, id, foe);
     if (this.kind === "wolverine") {
       const map = { jaguar: "rush", phantom: "barrage", ragemode: "ragemode" };
       return tryWolverineSpecial(this, map[id] || id, foe);
@@ -786,7 +789,8 @@ export class Fighter {
         break;
       }
       case FState.SPECIAL: {
-        updateSpecial(this, opponent, dt);
+        if (isCustomKind(this.kind)) updateCustomSpecial(this, opponent, dt);
+        else updateSpecial(this, opponent, dt);
         break;
       }
       case FState.GRAB: {
@@ -995,7 +999,7 @@ export class Fighter {
     switch (this.state) {
       case FState.ATTACK: {
 
-        const kit = FRAME_FOR[this.kind] ?? FRAME_FOR.wesker;
+        const kit = FRAME_FOR[this.kind] ?? (isCustomKind(this.kind) ? FRAME_FOR.custom : FRAME_FOR.wesker);
         const fr = kit[this.attackId] ?? kit.light1;
         if (this.kind === "spiderman" && this.phase === "active") {
           const flick = Math.floor(this.animTime * 14) % 2 === 0;

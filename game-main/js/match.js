@@ -5,7 +5,8 @@ export const ROUND_TIME = 99;
 import { CHARACTERS } from "./characters/data.js";
 import { BASE_HP } from "./combat/data.js";
 import { isUroborosUnlocked, isCheatWeskerUnlocked } from "./ui/unlock.js";
-import { isUroborosBanned } from "./net/gate.js";
+import { isUroborosBanned, isCustomsBanned } from "./net/gate.js";
+import { isCustomKind } from "./characters/custom.js";
 
 const EDGE = Object.freeze({
   wesker: Object.freeze({ wesker: 0, homelander: 1, wolverine: 0, hulk: -2, ironman: 2, thor: 1, uroboros: 0 }),
@@ -25,7 +26,7 @@ function edge(a, b) {
 
 export function draftCounterTeam(foeTeam, size) {
   const unlocked = isUroborosUnlocked() && !isUroborosBanned();
-  const kinds = Object.keys(CHARACTERS).filter((k) => (k !== "uroboros" || unlocked) && (k !== "cheatwesker" || isCheatWeskerUnlocked()));
+  const kinds = Object.keys(CHARACTERS).filter((k) => (k !== "uroboros" || unlocked) && (k !== "cheatwesker" || isCheatWeskerUnlocked()) && (isCustomsBanned() ? !isCustomKind(k) : true));
   const picked = [];
   for (let i = 0; i < size; i++) {
     const foe = foeTeam[i % foeTeam.length];

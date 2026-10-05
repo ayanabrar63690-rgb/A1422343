@@ -4,6 +4,7 @@
 // knowing anything about the socket layer.
 
 let banned = false;
+let customsBanned = false;
 
 export function setUroborosBanned(v) {
   banned = !!v;
@@ -11,4 +12,12 @@ export function setUroborosBanned(v) {
 
 export function isUroborosBanned() {
   return banned;
+}
+
+export function setCustomsBanned(v) {
+  customsBanned = !!v;
+}
+
+export function isCustomsBanned() {
+  return customsBanned;
 }

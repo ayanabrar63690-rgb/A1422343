@@ -1,5 +1,6 @@
 import { makeCanvas, px } from "./pixel.js";
 import { SPRITE_W, SPRITE_H } from "../config.js";
+import { paletteFor, customDef, isCustomKind } from "../characters/custom.js";
 
 const OUT = "#06060c";
 
@@ -298,6 +299,149 @@ function arm(ctx, x, y, w, h, sleeve, sleeveDark, fist) {
   px(ctx, x, y, w, h, sleeve);
   px(ctx, x, y, w, 1, sleeveDark);
   px(ctx, x + (w > 6 ? w - 3 : 0), y + h - 3, 3, 3, fist);
+}
+
+function lyingPaletteFor(pal) {
+  return {
+    torso: pal.cloth, rim: "#ffffff", pants: pal.clothDark, shade: "#06060c",
+    boot: pal.clothDark, bootHi: "#ffffff", skin: pal.skin, hair: pal.hair,
+    eye: pal.eye, eyeHi: "#ffffff", cape: null, belt: null,
+  };
+}
+
+// One parameterized painter covers all four custom skin archetypes; the
+// palette flips hair/eye/cloth, and the flags (dress, beard, sleek) tweak
+// the silhouette. Unknown pose flags fall back to the base stance.
+function paintCustom(ctx, p, pal) {
+  const cx = 18;
+  if (p.lying) { paintLying(ctx, p.lk || 0, lyingPaletteFor(pal)); return; }
+  const bob = p.bob;
+  const GR = pal.cloth, GD = pal.clothDark, SKIN = pal.skin, HAIR = pal.hair;
+  const EYE = pal.eye;
+  const drop = (p.crouch ? 8 : 0) + (p.dip || 0);
+  const lean = (p.dash ? 2 : 0) + (p.wind || 0);
+
+  // long back hair (anime girl, golden woman)
+  if (pal.dress) {
+    px(ctx, cx - 9 + (p.dash ? -2 : 0), 12 + bob, 5, 26, HAIR);
+    px(ctx, cx + 5 + (p.dash ? -2 : 0), 12 + bob, 5, 26, HAIR);
+    px(ctx, cx - 8, 38 + bob, 3, 4, pal.hairDark);
+    px(ctx, cx + 6, 38 + bob, 3, 4, pal.hairDark);
+  }
+
+  const legMain = pal.dress ? SKIN : GD;
+  const legDark = pal.dress ? "#d8b48c" : "#06060c";
+  leg(ctx, cx - 6 + p.legL, 34 + bob, 12, legMain, legDark, "#14141c", "#3a3a4d");
+  leg(ctx, cx + 1 + p.legR, 34 + bob, 12, legMain, legDark, "#14141c", "#3a3a4d");
+
+  ctx.save();
+  ctx.translate(lean, drop);
+  if (pal.dress) {
+    // flared skirt over the tops of the legs
+    px(ctx, cx - 8, 28 + bob, 17, 10, OUT);
+    px(ctx, cx - 7, 29 + bob, 15, 8, GR);
+    px(ctx, cx - 7, 29 + bob, 15, 2, GD);
+    px(ctx, cx - 7, 35 + bob, 15, 2, "#ffffff");
+    box(ctx, cx - 6, 19 + bob, 13, 11, GR);
+    px(ctx, cx - 6, 19 + bob, 2, 11, "#ffffff");
+  } else {
+    box(ctx, cx - 7, 19 + bob, 14, 16, GR);
+    px(ctx, cx - 7, 19 + bob, 2, 16, "#ffffff");
+    px(ctx, cx + 5, 19 + bob, 2, 16, GD);
+    px(ctx, cx - 7, 30 + bob, 14, 3, pal.sleek ? "#ffffff" : GD);
+  }
+  // head
+  const hy = 7 + bob + (p.headBob || 0);
+  box(ctx, cx - 5, hy, 10, 9, SKIN);
+  if (pal.sleek) {
+    px(ctx, cx - 5, hy - 1, 10, 4, HAIR);
+    px(ctx, cx + 3, hy + 3, 2, 5, HAIR);
+  } else if (pal.beard) {
+    px(ctx, cx - 5, hy - 1, 10, 4, HAIR);
+    px(ctx, cx - 5, hy + 6, 10, 4, pal.hairDark); // beard
+  } else {
+    px(ctx, cx - 5, hy - 1, 10, 5, HAIR);
+    px(ctx, cx - 6, hy + 2, 2, 8, HAIR); // side locks
+    px(ctx, cx + 4, hy + 2, 2, 8, HAIR);
+  }
+  // cute big eyes: white whites + colored pupils + shine
+  px(ctx, cx - 4, hy + 4, 3, 3, "#ffffff");
+  px(ctx, cx + 1, hy + 4, 3, 3, "#ffffff");
+  px(ctx, cx - 3, hy + 5, 2, 2, EYE);
+  px(ctx, cx + 2, hy + 5, 2, 2, EYE);
+  px(ctx, cx - 4, hy + 4, 1, 1, "#ffffff");
+  px(ctx, cx + 1, hy + 4, 1, 1, "#ffffff");
+  if (pal.beard) {
+    px(ctx, cx - 4, hy + 4, 1, 1, "#0b0b10");
+    px(ctx, cx + 2, hy + 4, 1, 1, "#0b0b10");
+  }
+
+  const punch = p.punch > 0 || p.palm || p.elbow || p.backfist || p.hook || p.cobra || p.gun || p.beam || p.lase || p.shout ? 1 : 0;
+  const kick = p.kick > 0 || p.sweep || p.webyank ? 1 : 0;
+  const overhead = p.overhead || p.slam || p.slam2 || p.smash || p.stomp || p.quake || p.dive ? 1 : 0;
+  if (overhead) {
+    px(ctx, cx - 10, 8 + bob, 7, 14, OUT);
+    px(ctx, cx - 9, 9 + bob, 5, 12, GR);
+    px(ctx, cx - 9, 7 + bob, 5, 4, SKIN);
+    px(ctx, cx + 4, 21 + bob, 5, 10, OUT);
+    px(ctx, cx + 5, 22 + bob, 3, 8, GR);
+  } else if (punch) {
+    const ex = cx + 7, ey = 22 + bob - (p.punch || 0);
+    px(ctx, ex - 1, ey - 1, 12, 5, OUT);
+    px(ctx, ex, ey, 11, 3, GR);
+    px(ctx, ex + 9, ey - 1, 4, 4, SKIN);
+    px(ctx, cx - 10, 21 + bob, 5, 10, OUT);
+    px(ctx, cx - 9, 22 + bob, 3, 8, GR);
+  } else if (kick) {
+    px(ctx, cx + 2, 36 + bob, 13, 5, GR);
+    px(ctx, cx + 11, 35 + bob, 4, 6, "#14141c");
+    px(ctx, cx - 10, 21 + bob, 5, 10, OUT);
+    px(ctx, cx - 9, 22 + bob, 3, 8, GR);
+    px(ctx, cx + 4, 21 + bob, 5, 10, OUT);
+    px(ctx, cx + 5, 22 + bob, 3, 8, GR);
+  } else if (p.guard === 1) {
+    px(ctx, cx + 1, 17 + bob, 6, 14, OUT);
+    px(ctx, cx + 2, 18 + bob, 4, 12, GR);
+    px(ctx, cx + 2, 16 + bob, 4, 4, SKIN);
+    px(ctx, cx - 10, 21 + bob, 5, 10, OUT);
+    px(ctx, cx - 9, 22 + bob, 3, 8, GR);
+  } else if (p.seize) {
+    px(ctx, cx - 1, 21 + bob, 11, 4, OUT);
+    px(ctx, cx, 22 + bob, 9, 2, GR);
+    px(ctx, cx + 8, 22 + bob, 4, 4, SKIN);
+    px(ctx, cx - 10, 21 + bob, 5, 10, OUT);
+    px(ctx, cx - 9, 22 + bob, 3, 8, GR);
+  } else {
+    px(ctx, cx - 10, 21 + bob + p.armSwing, 5, 10, OUT);
+    px(ctx, cx - 9, 22 + bob + p.armSwing, 3, 8, GR);
+    px(ctx, cx + 4, 21 + bob - p.armSwing, 5, 10, OUT);
+    px(ctx, cx + 5, 22 + bob - p.armSwing, 3, 8, GR);
+  }
+  ctx.restore();
+}
+
+export function buildCustomPortrait(skinId, themeId) {
+  const pal = paletteFor(skinId, themeId);
+  const sprites = buildSpritesForPal(pal);
+  const src = sprites.idle[0];
+  const [c, ctx] = makeCanvas(32, 32);
+  ctx.drawImage(src, 10, 4, 16, 16, 0, 0, 32, 32);
+  return c;
+}
+
+function buildSpritesForPal(pal) {
+  const table = poses("custom");
+  const paint = (ctx, p) => paintCustom(ctx, p, pal);
+  const out = {};
+  for (const key of Object.keys(table)) {
+    out[key] = [];
+    for (const p of table[key]) {
+      const [c, ctx] = makeCanvas(SPRITE_W, SPRITE_H);
+      paint(ctx, p);
+      out[key].push(c);
+    }
+  }
+  return out;
 }
 
 function paintWesker(ctx, p) {
@@ -2252,6 +2396,10 @@ function poses(kind) {
 }
 
 export function buildSprites(kind, madFace = false) {
+  if (isCustomKind(kind)) {
+    const def = customDef(kind);
+    if (def) return buildSpritesForPal(paletteFor(def.skinId, def.themeId));
+  }
   const table = poses(kind);
   if (madFace && (kind === "wesker" || kind === "cheatwesker")) {
 

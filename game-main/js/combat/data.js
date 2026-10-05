@@ -1,6 +1,9 @@
 import { CHARACTERS } from "../characters/data.js";
+import { isCustomKind } from "../characters/custom.js";
 
 export const BASE_HP = 100;
+
+
 
 const base = (o) => Object.freeze({
   startup: 0.10,
@@ -19,6 +22,49 @@ const base = (o) => Object.freeze({
   chip: 0,
   hit: Object.freeze({ w: 78, top: 120, h: 70 }),
   ...o,
+});
+
+// Custom-fighter normals: heavier, slower jab chains than Wesker's
+// speedster boxing. Tier stat multipliers are applied on top in movesFor.
+const CUSTOM_BASE = Object.freeze({
+  light1: base({
+    startup: 0.16, active: 0.09, recovery: 0.28, damage: 6,
+    hitstun: 0.34, hitstop: 0.06, knockback: 300, lunge: 26, chainTo: "light2",
+    blockstun: 0.22, blockPush: 340,
+  }),
+  light2: base({
+    startup: 0.15, active: 0.09, recovery: 0.26, damage: 7,
+    hitstun: 0.38, hitstop: 0.06, knockback: 330, lunge: 30, chainTo: "light3",
+    blockstun: 0.24, blockPush: 370,
+  }),
+  light3: base({
+    startup: 0.20, active: 0.10, recovery: 0.34, damage: 11,
+    hitstun: 0.52, hitstop: 0.09, knockback: 520, lunge: 36,
+    level: "high", blockstun: 0.30, blockPush: 440,
+  }),
+  heavy: base({
+    startup: 0.26, active: 0.10, recovery: 0.48, damage: 18,
+    hitstun: 0.66, hitstop: 0.12, knockback: 700, lunge: 62,
+    level: "mid", blockstun: 0.50, blockPush: 620,
+  }),
+  crouchLight: base({
+    startup: 0.15, active: 0.09, recovery: 0.26, damage: 6,
+    hitstun: 0.36, hitstop: 0.05, knockback: 320, lunge: 20,
+    level: "low", blockstun: 0.24, blockPush: 340,
+    hit: Object.freeze({ w: 80, top: 64, h: 52 }),
+  }),
+  airLight: base({
+    startup: 0.14, active: 0.10, recovery: 0.24, damage: 7,
+    hitstun: 0.36, hitstop: 0.05, knockback: 340, lunge: 30,
+    level: "mid", blockstun: 0.24, blockPush: 340,
+    hit: Object.freeze({ w: 80, top: 125, h: 75 }),
+  }),
+  airHeavy: base({
+    startup: 0.24, active: 0.10, recovery: 0.40, damage: 13,
+    hitstun: 0.58, hitstop: 0.10, knockback: 560, lunge: 44,
+    level: "mid", blockstun: 0.36, blockPush: 520,
+    hit: Object.freeze({ w: 88, top: 135, h: 85 }),
+  }),
 });
 
 export const WESKER_BASE = Object.freeze({
@@ -504,7 +550,7 @@ export function movesFor(kind) {
     : kind === "uroboros" ? UROBOROS_BASE : kind === "cheatwesker" ? Object.freeze({
         ...WESKER_BASE,
         light2: Object.freeze({ ...WESKER_BASE.light2, chainTo: "heavy", chainWith: "heavy" }),
-      }) : WESKER_BASE;
+      }) : (isCustomKind(kind) ? CUSTOM_BASE : WESKER_BASE);
   const st = CHARACTERS[kind].stats;
   const out = {};
   for (const [k, v] of Object.entries(table)) {
@@ -522,6 +568,16 @@ export function movesFor(kind) {
 }
 
 export const FRAME_FOR = Object.freeze({
+  custom: Object.freeze({
+    light1: Object.freeze({ startup: 4, active: 6, recovery: 6 }),
+    light2: Object.freeze({ startup: 4, active: 7, recovery: 7 }),
+    light3: Object.freeze({ startup: 4, active: 8, recovery: 8 }),
+    heavy: Object.freeze({ startup: 4, active: 9, recovery: 9 }),
+    gun: Object.freeze({ startup: 4, active: 12, recovery: 12 }),
+    crouchLight: Object.freeze({ startup: 4, active: 13, recovery: 13 }),
+    airLight: Object.freeze({ startup: 4, active: 16, recovery: 16 }),
+    airHeavy: Object.freeze({ startup: 4, active: 17, recovery: 17 }),
+  }),
   wesker: Object.freeze({
     light1: Object.freeze({ startup: 4, active: 6, recovery: 6 }),
     light2: Object.freeze({ startup: 4, active: 7, recovery: 7 }),

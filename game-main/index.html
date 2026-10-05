@@ -17,6 +17,7 @@
       <div class="subtitle">Wesker vs Homelander • procedural pixel-art brawl</div>
       <div class="menu-buttons">
         <button id="btn-start" class="pbtn">▶ START</button>
+        <button id="btn-create" class="pbtn">✚ CREATE FIGHTER</button>
         <button id="btn-howto" class="pbtn ghost">HOW TO PLAY</button>
         <button id="btn-spin" class="pbtn ghost">SPIN STRIKES: ON</button>
       </div>
@@ -125,6 +126,34 @@
       </div>
     </div>
 
+    <div id="screen-create" class="screen">
+      <div class="screen-title">CREATE YOUR FIGHTER</div>
+      <div class="create-grid">
+        <div class="create-form">
+          <label class="create-label" for="create-name">NAME</label>
+          <input id="create-name" maxlength="12" placeholder="e.g. NOVA" />
+          <div class="create-label">SKIN</div>
+          <div id="create-skins" class="choice-row"></div>
+          <div class="create-label">TIER</div>
+          <div id="create-tiers" class="choice-row"></div>
+          <div class="create-label">ABILITIES — pick 3 (1st = Space, 2nd = F, 3rd = O)</div>
+          <div id="create-abilities" class="choice-row"></div>
+          <div class="create-label">THEME</div>
+          <div id="create-themes" class="choice-row"></div>
+        </div>
+        <div class="create-preview">
+          <canvas id="create-preview" width="96" height="96"></canvas>
+          <div id="create-preview-name">—</div>
+          <div id="create-preview-tier"></div>
+          <div id="create-preview-stats"></div>
+          <div id="create-preview-abilities"></div>
+        </div>
+      </div>
+      <button id="btn-create-finish" class="pbtn" disabled>CREATE FIGHTER</button>
+      <div id="create-hint" class="slot-label">type a name + pick 3 abilities</div>
+      <button id="btn-create-back" class="pbtn ghost">← BACK</button>
+    </div>
+
     <div id="screen-map" class="screen">
       <div class="screen-title">SELECT STAGE</div>
       <div class="map-row">
@@ -146,6 +175,21 @@
   </div>
   <div id="hint">LMB/J light • RMB/K heavy • E Samurai Edge • L grab • X/C tag • Space/F/O specials • T/U rage • H hitboxes • R reset • ESC menu</div>
 </div>
+<script>
+  // Keep the whole 960-wide stage inside the browser viewport.
+  function fitStage() {
+    const wrap = document.getElementById('wrap');
+    if (!wrap) return;
+    const sx = window.innerWidth / 1000;
+    const sy = window.innerHeight / 700;
+    const s = Math.min(1, sx, sy);
+    wrap.style.transform = 'scale(' + s + ')';
+    wrap.style.transformOrigin = 'top center';
+  }
+  window.addEventListener('resize', fitStage);
+  window.addEventListener('load', fitStage);
+  fitStage();
+</script>
 <script type="module" src="js/main.js"></script>
 </body>
 </html>

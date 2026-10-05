@@ -73,6 +73,31 @@ canvas#game {
 .tag.p2 { background: #ff4b4b; color: #111; }
 .diff-row { display: flex; gap: 8px; align-items: center; justify-content: center; }
 .diff-row .pbtn.selected { outline: 3px solid #ffd23e; }
+.hidden { display: none !important; }
+
+/* ---- character creation ---- */
+#screen-create { justify-content: flex-start; overflow-y: auto; padding-top: 18px; }
+.create-grid { display: flex; gap: 16px; align-items: flex-start; justify-content: center; max-width: 900px; flex-wrap: wrap; }
+.create-form { background: #14141f; border: 3px solid #2a2a3a; padding: 10px 14px; text-align: left; width: 560px; }
+.create-label { color: #9fd4ff; font-size: 12px; margin: 8px 0 4px; }
+#create-name { background: #0b0b12; color: #ffd23e; border: 2px solid #3a3a55; font-family: inherit; font-weight: bold; font-size: 18px; padding: 6px 10px; width: 100%; text-transform: uppercase; }
+.choice-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.choice { background: #0b0b12; border: 2px solid #3a3a55; color: #ddd; font-family: inherit; font-size: 11px; padding: 6px 8px; cursor: pointer; text-align: left; }
+.choice:hover { border-color: #ffd23e; }
+.choice.selected { border-color: #ffd23e; background: #26263a; color: #fff; }
+.choice.disabled { opacity: 0.35; pointer-events: none; }
+.choice canvas { display: block; width: 48px; height: 48px; margin-bottom: 4px; }
+.choice b { display: block; font-size: 12px; color: #ffd23e; margin-bottom: 2px; }
+.choice span { color: #9fd4ff; }
+.choice.theme { width: 64px; text-align: center; }
+.choice.theme .swatch { display: block; width: 22px; height: 22px; margin: 0 auto 4px; border: 2px solid #000; }
+.create-preview { background: #14141f; border: 3px solid #2a2a3a; padding: 10px; width: 280px; text-align: center; }
+#create-preview { width: 96px; height: 96px; background: #0b0b12; border: 2px solid #3a3a55; }
+#create-preview-name { color: #ffd23e; font-weight: bold; font-size: 16px; margin-top: 6px; }
+#create-preview-tier { color: #b06bff; font-size: 12px; margin: 2px 0; }
+#create-preview-stats { color: #9fd4ff; font-size: 11px; line-height: 1.5; }
+#create-preview-abilities { color: #4fd07a; font-size: 11px; margin-top: 6px; line-height: 1.5; min-height: 40px; }
+
 .map-row { display: flex; gap: 10px; }
 .map-card {
   font-family: inherit; font-size: 14px; font-weight: bold; cursor: pointer;

@@ -7,7 +7,8 @@ import { SETTINGS } from "../config.js";
 import { draftCounterTeam } from "../match.js";
 import { isUroborosUnlocked } from "./unlock.js";
 import { isCheatWeskerUnlocked } from "./unlock.js";
-import { isUroborosBanned } from "../net/gate.js";
+import { isUroborosBanned, isCustomsBanned } from "../net/gate.js";
+import { customKinds } from "../characters/custom.js";
 
 function show(id) {
   for (const s of document.querySelectorAll(".screen")) s.classList.remove("visible");
@@ -23,7 +24,10 @@ let draftSide = 1;
 export function visibleRoster() {
   const unlocked = isUroborosUnlocked() && !isUroborosBanned();
   const cheat = isCheatWeskerUnlocked();
-  return ROSTER_ORDER.filter((k) => CHARACTERS[k] && (k !== "uroboros" || unlocked) && (k !== "cheatwesker" || cheat));
+  const base = ROSTER_ORDER.filter((k) => CHARACTERS[k] && (k !== "uroboros" || unlocked) && (k !== "cheatwesker" || cheat));
+  // Player-created fighters stay on the roster unless a LAN gate is up.
+  if (!isCustomsBanned()) for (const k of customKinds()) if (CHARACTERS[k]) base.push(k);
+  return base;
 }
 
 function statLine(kind) {
