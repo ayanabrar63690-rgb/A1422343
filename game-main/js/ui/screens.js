@@ -1,11 +1,11 @@
+// DOM screen manager: menu / char-select / map-select / fight toolbar.
+// Keeps UI separate from canvas rendering (clean architecture boundary).
 import { CHARACTERS } from "../characters/data.js";
 import { BASE_HP } from "../combat/data.js";
 import { buildPortrait } from "../render/sprites.js";
 import { AudioFX } from "../audio.js";
 import { MAPS } from "../maps/index.js";
 import { SETTINGS } from "../config.js";
-import { draftCounterTeam } from "../match.js";
-import { isUroborosUnlocked } from "./unlock.js";
 
 function show(id) {
   for (const s of document.querySelectorAll(".screen")) s.classList.remove("visible");
@@ -15,110 +15,37 @@ function show(id) {
 
 const MAP_HINT_DEFAULT = "Pick a stage to enter the scene.";
 
-const ROSTER_ORDER = ["wesker", "homelander", "wolverine", "hulk", "ironman", "thor", "spiderman", "doom", "uroboros"];
-let draftSide = 1;
-
-export function visibleRoster() {
-  const unlocked = isUroborosUnlocked();
-  return ROSTER_ORDER.filter((k) => CHARACTERS[k] && (k !== "uroboros" || unlocked));
-}
-
-function statLine(kind) {
+function paintPortraits(sel) {
   const signed = (m) => ((m - 1) * 100 >= 0 ? "+" : "") + Math.round((m - 1) * 100) + "%";
-  const st = CHARACTERS[kind].stats;
-  return `SPD ${signed(st.moveSpeed)} · ATK ${signed(st.attackSpeed)} · ` +
-    `DMG ${signed(st.damage)} · HP ${Math.round(BASE_HP * st.health)}`;
-}
-
-function paintDraft(sel) {
-
-  for (const [key, boxId] of [["p1", "members-p1"], ["p2", "members-p2"]]) {
-    const box = document.getElementById(boxId);
-    box.innerHTML = "";
-    sel[key].forEach((kind, i) => {
-      const b = document.createElement("button");
-      b.className = "member" + (i === 0 ? " lead" : "");
-      b.title = i === 0 ? `${CHARACTERS[kind].name} leads (can't remove)` : `Remove ${CHARACTERS[kind].name}`;
-      b.appendChild(buildPortrait(kind));
-      const nm = document.createElement("span");
-      nm.textContent = CHARACTERS[kind].name;
-      b.appendChild(nm);
-      b.onclick = () => {
-        if (sel[key].length <= 1) { AudioFX.blip(220); return; }
-        AudioFX.blip(400);
-        sel[key].splice(i, 1);
-        paintDraft(sel);
-      };
-      box.appendChild(b);
-    });
-    for (let i = sel[key].length; i < sel.teamSize; i++) {
-      const e = document.createElement("div");
-      e.className = "slot-empty";
-      e.textContent = "+";
-      box.appendChild(e);
-    }
+  for (const p of [1, 2]) {
+    const team = p === 1 ? sel.p1 : sel.p2;
+    const kind = team[team.length - 1]; // portrait follows the latest pick
+    const slot = document.getElementById(p === 1 ? "p1-portrait" : "p2-portrait");
+    slot.innerHTML = "";
+    const c = buildPortrait(kind);
+    c.style.width = "128px"; c.style.height = "128px";
+    slot.appendChild(c);
+    document.getElementById(p === 1 ? "p1-name" : "p2-name").textContent =
+      CHARACTERS[kind].name;
+    // Team order readout: first member leads, tagged in left-to-right on KO.
+    const teamEl = document.getElementById(p === 1 ? "p1-team" : "p2-team");
+    if (teamEl) teamEl.textContent = team.map((k) => CHARACTERS[k].name).join(" → ");
+    // M7 stat readout, straight from the same table the engine uses.
+    const st = CHARACTERS[kind].stats;
+    document.getElementById(p === 1 ? "p1-stats" : "p2-stats").textContent =
+      `SPD ${signed(st.moveSpeed)} · ATKSPD ${signed(st.attackSpeed)} · ` +
+      `DMG ${signed(st.damage)} · HP ${Math.round(BASE_HP * st.health)}`;
   }
-
-  const roster = document.getElementById("roster");
-  roster.innerHTML = "";
-  for (const kind of visibleRoster()) {
-    const card = document.createElement("button");
-    card.className = "fighter-card";
-    card.style.borderColor = CHARACTERS[kind].accent;
-    card.appendChild(buildPortrait(kind));
-    const nm = document.createElement("div");
-    nm.className = "fighter-name";
-    nm.textContent = CHARACTERS[kind].name;
-    nm.style.color = CHARACTERS[kind].accent;
-    const st = document.createElement("div");
-    st.className = "fighter-stats";
-    st.textContent = statLine(kind);
-    const tags = document.createElement("div");
-    tags.className = "fighter-tags";
-    if (sel.p1.includes(kind)) {
-      const t = document.createElement("span");
-      t.className = "tag p1";
-      t.textContent = "P1";
-      tags.appendChild(t);
-    }
-    if (sel.p2.includes(kind)) {
-      const t = document.createElement("span");
-      t.className = "tag p2";
-      t.textContent = "P2";
-      tags.appendChild(t);
-    }
-    card.append(nm, st, tags);
-    card.onclick = () => {
-      AudioFX.blip(520);
-      const team = draftSide === 1 ? sel.p1 : sel.p2;
-      if (team.length >= sel.teamSize) team.length = 0;
-      team.push(kind);
-
-      const other = draftSide === 1 ? sel.p2 : sel.p1;
-      if (other.length < sel.teamSize) draftSide = draftSide === 1 ? 2 : 1;
-      paintSide();
-      paintDraft(sel);
-    };
-    roster.appendChild(card);
-  }
-}
-
-function paintSide() {
-  document.querySelectorAll("[data-side]").forEach((b) => {
-    const n = Number(b.dataset.side);
-    b.classList.toggle("selected", n === draftSide);
-    b.classList.toggle("ghost", n !== draftSide);
-  });
 }
 
 export function initScreens(sel, hooks) {
-  paintDraft(sel);
-  paintSide();
+  paintPortraits(sel);
   document.getElementById("btn-start").onclick = () => { AudioFX.blip(660); show("screen-char"); hooks.onState("CHAR_SELECT"); };
   document.getElementById("btn-howto").onclick = () => {
     document.getElementById("howto").classList.toggle("hidden");
   };
-
+  // Wolverine spin-strike toggle: flips the turnaround rendering live, any
+  // time the menu is visible. Label always shows the current state.
   const paintSpin = () => {
     const b = document.getElementById("btn-spin");
     if (b) {
@@ -132,24 +59,15 @@ export function initScreens(sel, hooks) {
     SETTINGS.wolvieSpin = !SETTINGS.wolvieSpin;
     paintSpin();
   };
-  document.querySelectorAll("[data-side]").forEach((b) => {
-    b.onclick = () => { AudioFX.blip(600); draftSide = Number(b.dataset.side); paintSide(); };
-  });
-  document.querySelectorAll("[data-cpu-draft]").forEach((b) => {
-    b.onclick = () => {
-      AudioFX.blip(700);
-      sel.p2 = draftCounterTeam(sel.p1, sel.teamSize);
-      paintDraft(sel);
-    };
-  });
   document.querySelectorAll("[data-p]").forEach((b) => {
-
     b.onclick = () => {
       AudioFX.blip(520);
+      // Team drafting: clicks append until the team is full; a full team's
+      // next click restarts the draft with that fighter (predictable reset).
       const team = b.dataset.p === "1" ? sel.p1 : sel.p2;
       if (team.length >= sel.teamSize) team.length = 0;
       team.push(b.dataset.c);
-      paintDraft(sel);
+      paintPortraits(sel);
     };
   });
   const paintTeam = () => {
@@ -164,13 +82,13 @@ export function initScreens(sel, hooks) {
     b.onclick = () => {
       AudioFX.blip(600);
       sel.teamSize = Number(b.dataset.team);
-
+      // Trim over-full teams, pad short ones by repeating the lead.
       for (const key of ["p1", "p2"]) {
         sel[key].length = Math.min(sel[key].length, sel.teamSize);
         while (sel[key].length < sel.teamSize) sel[key].push(sel[key][0]);
       }
       paintTeam();
-      paintDraft(sel);
+      paintPortraits(sel);
     };
   });
   const paintDiff = () => {
@@ -190,7 +108,8 @@ export function initScreens(sel, hooks) {
     hooks.onState("MAP_SELECT");
   };
   document.getElementById("btn-back-char").onclick = () => { show("screen-char"); hooks.onState("CHAR_SELECT"); };
-
+  // M13 final select: hovering a card previews the stage (size/feel);
+  // clicking (incl. RANDOM, re-rolled every time) enters the scene.
   const hintFor = (id) =>
     id === "random" ? "Rolls a fresh stage every match."
       : MAPS[id]?.desc ?? MAP_HINT_DEFAULT;
@@ -203,6 +122,5 @@ export function initScreens(sel, hooks) {
   });
   document.getElementById("btn-quit").onclick = () => { hooks.onQuit(); show("screen-menu"); };
   document.getElementById("btn-swap-map").onclick = () => hooks.onSwapMap();
-  return { show, paintPortraits: () => paintDraft(sel), paintDraft: () => paintDraft(sel) };
+  return { show, paintPortraits: () => paintPortraits(sel) };
 }
-

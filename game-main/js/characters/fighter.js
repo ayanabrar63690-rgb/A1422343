@@ -1,16 +1,24 @@
+// M3 fighter: movement machine (M2) + combat layer.
+// Attacks run startup -> active -> recovery; lights chain; hits cause
+// HITSTUN + knockback; hp 0 means KO (minimal fall-over; presentation M15).
 import { SPRITE_SCALE, MOVE, GROUND_Y, SETTINGS } from "../config.js";
 import { buildSprites, FEET_PAD } from "../render/sprites.js";
 import { flipped } from "../render/pixel.js";
 import { integrateAir, clampArena } from "../physics.js";
-import { BASE_HP, FRAME_FOR, movesFor, GRAB, RAGE, REGEN, WESKER_REGEN, UROBOROS_REGEN, BLEED, DECAY, SPIDERMAN_SPECIALS } from "../combat/data.js";
-import { resolveStrike, grabCheck, vulnMult } from "../combat/combat.js";
-import { tryWeskerSpecial, tryHomelanderSpecial, tryWolverineSpecial, tryWeskerShadow, tryHulkSpecial, tryIronmanSpecial, tryThorSpecial, tryUroborosSpecial, trySpidermanSpecial, trySpidermanZip, trySpidermanSwing, tryDoomSpecial, tryDoomPhoton, tryDoomSnap, updateSpecial } from "../combat/specials.js";
+import { BASE_HP, FRAME_FOR, movesFor, GRAB, RAGE, REGEN, BLEED } from "../combat/data.js";
+import { resolveStrike, grabCheck } from "../combat/combat.js";
+import { tryWeskerSpecial, tryHomelanderSpecial, tryWolverineSpecial, tryWeskerShadow, tryHulkSpecial, updateSpecial } from "../combat/specials.js";
 import { AudioFX } from "../audio.js";
 import { Sparks } from "../effects.js";
 import { CHARACTERS } from "./data.js";
 
-const SIZE = Object.freeze({ wesker: 1, homelander: 1, wolverine: 1, hulk: 1.32, uroboros: 1.32, spiderman: 1, doom: 1 });
+// Body scale per kind. Hulk is LARGE: 1.32x sprite + hurtbox (combat.js
+// scales boxes off w/h, so the big frame is honest — easier to hit, ducks
+// lows by crouching like everyone else).
+const SIZE = Object.freeze({ wesker: 1, homelander: 1, wolverine: 1, hulk: 1.32 });
 
+// Samurai Edge i-frames (sec): untouchable through the draw and into the
+// shot — same burst convention as the specials (cf. specials.js 0.3s pops).
 const EDGE_IFRAMES = 0.25;
 
 export const FState = Object.freeze({
@@ -23,15 +31,15 @@ export const FState = Object.freeze({
   LAND: "LAND",
   DASH: "DASH",
   BACKDASH: "BACKDASH",
-  ATTACK: "ATTACK",
-  SPECIAL: "SPECIAL",
-  GRAB: "GRAB",
-  THROWN: "THROWN",
-  BLOCK: "BLOCK",
-  HITSTUN: "HITSTUN",
-  BLOCKSTUN: "BLOCKSTUN",
-  KDOWN: "KDOWN",
-  KO: "KO",
+  ATTACK: "ATTACK",   // startup / active / recovery sub-phases (this.phase)
+  SPECIAL: "SPECIAL", // scripted super (see combat/specials.js, this.special)
+  GRAB: "GRAB",       // startup / active / carry / toss|recover (this.phase)
+  THROWN: "THROWN",   // seized: grabber positions us until the toss
+  BLOCK: "BLOCK",     // directional guard: hold AWAY (S+AWAY = crouch guard)
+  HITSTUN: "HITSTUN", // control lost; knockback slide
+  BLOCKSTUN: "BLOCKSTUN", // guarded hit: no damage, pushback slide, chip later
+  KDOWN: "KDOWN",     // special knockdown: pushed, dropped, 0.4s prone
+  KO: "KO",           // minimal M3 fall-over; rounds/presentation are M15
 });
 
 export class Fighter {
@@ -46,20 +54,24 @@ export class Fighter {
     this.stateT = 0;
     this.dashDir = 1;
     this.animTime = Math.random() * 10;
-
+    // Movement intents (main.js):
     this.moving = 0;
     this.crouchHeld = false;
-    this.blockHeld = false;
-    this.blockLow = false;
+    this.blockHeld = false; // edge-free hold: AWAY from opponent (computed in drive)
+    this.blockLow = false;  // true while crouch-guarding (S + AWAY)
     this.jumpQueued = false;
     this.dashQueued = 0;
-    this.tagRequest = null;
-    this.lastContact = null;
-    this.freezeT = 0;
-    this.kT = 0;
-    this.crumple = false;
-    this.clothP = 0;
-
+    this.tagRequest = null; // pending manual tag-out (X/C keys, consumed by main)
+    this.lastContact = null; // combat report for main.js feedback ({type,x,y})
+    this.freezeT = 0; // time-stop lock: level-3 rage cinematics pin the victim
+    this.kT = 0; // knockdown clock (12-frame fall -> lie -> rise)
+    this.crumple = false; // blocked special: guard breaks into a fall after the shove
+    this.clothP = 0; // cloth phase: advances with real speed (see update)
+    // Combat:
+    // M7 stats: health sizes the bar; moveSpeed pre-scales every locomotion
+    // speed into one table (jump arc, gravity, and feel-timings stay shared
+    // on purpose — both fighters jump identically). Attack tempo + damage
+    // arrive already scaled inside movesFor(); grabs stay unscaled for both.
     const st = CHARACTERS[kind].stats;
     this.maxHp = Math.round(BASE_HP * st.health);
     this.hp = this.maxHp;
@@ -72,36 +84,31 @@ export class Fighter {
       dashBack: MOVE.DASH_BACK_SPEED * st.moveSpeed,
     };
     this.attackId = null;
-    this.phase = null;
+    this.phase = null; // "startup" | "active" | "recovery"
     this.phaseT = 0;
-    this.attackDir = 1;
+    this.attackDir = 1; // facing locked at attack start (no mid-swing turns)
     this.hasHit = false;
-    this.chainQueued = false;
+    this.chainQueued = false; // buffered light press for the combo chain
     this.knockVX = 0;
-    this.victim = null;
-    this.heldBy = null;
-    this.holdT = 0;
-    this.blockRetreating = false;
-
+    this.victim = null; // seized foe during GRAB carry (positioned each frame)
+    this.heldBy = null; // grabber holding us during THROWN (safety-checked)
+    this.holdT = 0;     // THROWN safety timeout — never stuck if hold breaks
+    this.blockRetreating = false; // true while block-walking backward (anim reads it)
+    // M9 rage: starts empty (0/300), three levels of 100. M10/M11 abilities
+    // spend levels through spendRage(); gains arrive via addRage() from
+    // strikes, blocks, and throws (see combat.js + GRAB toss below).
     this.rage = 0;
-    this.rageFlash = 0;
-
+    this.rageFlash = 0; // level-up celebration timer (HUD reads it)
+    // Wolverine systems: healing factor + bleed DoT + rush low-profile.
     this.sinceDamageT = 99;
     this.bleedN = 0;
     this.bleedT = 0;
-    this.decayN = 0;
-    this.decayT = 0;
-    this.vuln = false;
     this.rushLowT = 0;
-    this.goreMarks = 0;
-
+    // M10 specials: scripted state (id + per-use scratch in this.special),
+    // brief invulnerability windows, and a camera-kick outbox for main.js.
     this.specialId = null;
     this.special = null;
     this.invulnT = 0;
-    this.webT = 0;
-    this.zipCD = 0;
-    this.swingCD = 0;
-    this.snapCD = 0;
     this.camKick = 0;
     this.sprites = buildSprites(kind);
   }
@@ -110,13 +117,16 @@ export class Fighter {
   get h() { return 52 * SPRITE_SCALE * (SIZE[this.kind] ?? 1); }
 
   get isLow() {
-    if (this.rushLowT > 0) return true;
+    if (this.rushLowT > 0) return true; // Adamantium Rush ducks highs mid-dash
     if (this.state === FState.CROUCH || this.state === FState.SNEAK) return true;
-    if (this.state === FState.KDOWN) return true;
-    if (this.state === FState.BLOCK) return this.blockLow;
+    if (this.state === FState.KDOWN) return true; // prone ducks head-height rays
+    if (this.state === FState.BLOCK) return this.blockLow; // low guard ducks too
     return false;
   }
 
+  // Walkable guard (MVC3 style): holding AWAY always raises guard on the
+  // ground, at any range — and the same hold keeps retreating. Range no
+  // longer decides guard vs walk; BLOCK itself walks back.
   nearFoe(other) {
     return Math.abs(other.x - this.x) <= MOVE.GUARD_RANGE;
   }
@@ -127,6 +137,7 @@ export class Fighter {
     return Math.min(3, Math.floor(this.rage / RAGE.PER_LEVEL));
   }
 
+  // Gain rage (clamped). Trips a HUD flash + M14 chime on a new level.
   addRage(n) {
     const before = this.rageLevel;
     this.rage = Math.max(0, Math.min(RAGE.MAX, this.rage + n));
@@ -137,6 +148,8 @@ export class Fighter {
     return this.rage;
   }
 
+  // Pay `levels` of rage for a special ability. Returns false (and pays
+  // nothing) when the meter is short — callers must check before firing.
   spendRage(levels) {
     if (this.rageLevel < levels) return false;
     this.rage = Math.max(0, this.rage - levels * RAGE.PER_LEVEL);
@@ -149,26 +162,23 @@ export class Fighter {
     this.bleedT = BLEED.interval;
   }
 
-  applyDecay(n) {
-    if (this.hp <= 0) return;
-    this.decayN = Math.max(this.decayN, n);
-    this.decayT = DECAY.interval;
-  }
-
   faceOpponent(other) {
     this.facing = other.x >= this.x ? 1 : -1;
   }
 
   queueJump() { this.jumpQueued = true; }
   queueDash(screenDir) { this.dashQueued = screenDir; }
-  queueTag(which) { this.tagRequest = which; }
+  queueTag(which) { this.tagRequest = which; } // "next" | "alt" (main.js consumes)
 
+  // LMB-equivalent. Grounded neutral starts light1 (chains); crouched
+  // throws the low poke; airborne throws the air kick. No chains off
+  // crouch/air starters — they enders, not links.
   pressLight() {
-    if (this.hp <= 0 || this.freezeT > 0 || this.webT > 0) return;
+    if (this.hp <= 0 || this.freezeT > 0) return;
     if (this.state === FState.ATTACK) {
       const mv = this.attackMove;
       if (mv && mv.chainTo && (this.phase === "active" || this.phase === "recovery")) {
-        this.chainQueued = true;
+        this.chainQueued = true; // LMB+LMB(+LMB) chain, one stage per press
       }
       return;
     }
@@ -183,8 +193,11 @@ export class Fighter {
     }
   }
 
+  // RMB-equivalent. Wesker: Cobra Strike (fast lunging heavy, grounded) or
+  // the air dive kick. Homelander: command throw standing — but crouched he
+  // sweeps, and airborne he slams (his only strikes in those stances).
   pressHeavy() {
-    if (this.hp <= 0 || this.freezeT > 0 || this.webT > 0) return;
+    if (this.hp <= 0 || this.freezeT > 0) return;
     if (!this.grounded) {
       if (this.state !== FState.ATTACK &&
         (this.state === FState.JUMP || this.state === FState.FALL)) {
@@ -207,8 +220,10 @@ export class Fighter {
     }
   }
 
+  // M6 grab. Same neutral gates as strikes (no grabbing from guard/stun/air)
+  // but resolves through grabCheck, which ignores blocking entirely.
   pressGrab() {
-    if (this.hp <= 0 || this.freezeT > 0 || this.webT > 0) return;
+    if (this.hp <= 0 || this.freezeT > 0) return;
     if (this.grounded &&
       (this.state === FState.IDLE || this.state === FState.WALK ||
        this.state === FState.CROUCH || this.state === FState.SNEAK)) {
@@ -221,11 +236,24 @@ export class Fighter {
     }
   }
 
+  // SAMURAI EDGE — WESKER-ONLY firearm (E key, single press).
+  // Identity gate FIRST and absolute: Homelander (or any future kind) can
+  // never enter this path, so his E safely falls back to pressHeavy (grab).
+  // Built to feel instant, like a 3-bar super:
+  // - fires from grounded neutral (IDLE/WALK/CROUCH/SNEAK/LAND), from BLOCK
+  //   (guard-cancel), from DASH/BACKDASH (dash-cancel), and as a BURST out
+  //   of HITSTUN/BLOCKSTUN (grounded only — launched victims stay helpless);
+  // - cancels ANY in-progress swing (any normal at any phase — mid-combo,
+  //   mid-Cobra, anything that isn't the gun itself);
+  // - grants i-frames through the draw (EDGE_IFRAMES), so it beats the thing
+  //   that was about to hit you instead of trading with it.
+  // Never restarts the gun itself (spam guard). Air, grabs, specials, KO:
+  // refuse.
   trySamuraiEdge() {
-    if (this.kind !== "wesker") return false;
-    if (this.hp <= 0 || this.freezeT > 0 || this.webT > 0 || !this.grounded) return false;
+    if (this.kind !== "wesker") return false; // WESKER-ONLY, first and absolute
+    if (this.hp <= 0 || this.freezeT > 0 || !this.grounded) return false;
     if (this.state === FState.ATTACK) {
-      if (this.attackId === "gun") return false;
+      if (this.attackId === "gun") return false; // spam guard: never restart
       this.fireGun();
       return true;
     }
@@ -234,12 +262,12 @@ export class Fighter {
       case FState.WALK:
       case FState.CROUCH:
       case FState.SNEAK:
-      case FState.BLOCK:
+      case FState.BLOCK: // guard-cancel: shoot straight out of a block
       case FState.DASH:
       case FState.BACKDASH:
       case FState.LAND:
-      case FState.HITSTUN:
-      case FState.BLOCKSTUN:
+      case FState.HITSTUN: // burst: break out of getting comboed
+      case FState.BLOCKSTUN: // burst: break out of chip pressure
         this.fireGun();
         return true;
       default:
@@ -247,6 +275,9 @@ export class Fighter {
     }
   }
 
+  // Shared ignition: enters the gun, raises i-frames through the draw, and
+  // cuts any inherited slide so a stun-burst truly breaks the combo instead
+  // of sliding through its own shot.
   fireGun() {
     this.startAttack("gun");
     this.invulnT = Math.max(this.invulnT, EDGE_IFRAMES);
@@ -254,63 +285,8 @@ export class Fighter {
     this.chainQueued = false;
   }
 
-  tryRepulsor() {
-    if (this.kind !== "ironman") return false;
-    if (this.hp <= 0 || this.freezeT > 0 || this.webT > 0 || !this.grounded) return false;
-    if (this.state === FState.ATTACK) {
-      if (this.attackId === "repulsor") return false;
-      this.startAttack("repulsor");
-      return true;
-    }
-    switch (this.state) {
-      case FState.IDLE:
-      case FState.WALK:
-      case FState.CROUCH:
-      case FState.SNEAK:
-      case FState.BLOCK:
-      case FState.DASH:
-      case FState.BACKDASH:
-      case FState.LAND:
-        this.startAttack("repulsor");
-        return true;
-      default:
-        return false;
-    }
-  }
-
-  tryHammer() {
-    if (this.kind !== "thor") return false;
-    if (this.hp <= 0 || this.freezeT > 0 || this.webT > 0 || !this.grounded) return false;
-    if (this.state === FState.ATTACK) {
-      if (this.attackId === "hammer") return false;
-      this.startAttack("hammer");
-      return true;
-    }
-    switch (this.state) {
-      case FState.IDLE:
-      case FState.WALK:
-      case FState.CROUCH:
-      case FState.SNEAK:
-      case FState.BLOCK:
-      case FState.DASH:
-      case FState.BACKDASH:
-      case FState.LAND:
-        this.startAttack("hammer");
-        return true;
-      default:
-        return false;
-    }
-  }
-
-  tryPhoton() {
-    if (this.kind !== "doom") return false;
-    return tryDoomPhoton(this);
-  }
-  trySnap(foe) {
-    if (this.kind !== "doom") return false;
-    return tryDoomSnap(this, foe);
-  }
-
+  // Seized by a grabber: attack (if any) is interrupted, control is gone
+  // until the toss converts us to airborne HITSTUN (or the safety times out).
   takeGrabbed(grabber) {
     this.attackId = null;
     this.phase = null;
@@ -324,26 +300,15 @@ export class Fighter {
     this.holdT = 0.8;
   }
 
+  // M10/M11 special entry (Space/F/O slots; P2 mirror ;/'/P). Each kit maps
+  // the shared slots to its own ids — Homelander's Space is a laser, not a
+  // jaguar. Gates + rage payment live in specials.js.
+  // Shadow Step: S + double-tap direction (drive() routes it before dash).
   tryShadow(screenDir) {
     if (this.kind !== "wesker") return false;
-    if (this.webT > 0) return false;
     return tryWeskerShadow(this, screenDir);
   }
-  tryWebZip(screenDir) {
-    if (this.kind !== "spiderman") return false;
-    const dir = screenDir === undefined || screenDir === null
-      ? (this.moving !== 0 ? this.moving : this.facing)
-      : screenDir;
-    return trySpidermanZip(this, dir >= 0 ? 1 : -1);
-  }
-  trySwing(screenDir) {
-    if (this.kind !== "spiderman") return false;
-    const dir = screenDir === undefined || screenDir === null
-      ? (this.moving !== 0 ? this.moving : this.facing)
-      : screenDir;
-    return trySpidermanSwing(this, dir >= 0 ? 1 : -1);
-  }  trySpecial(id, foe) {
-    if (this.webT > 0) return false;
+  trySpecial(id, foe) {
     if (this.kind === "wesker") return tryWeskerSpecial(this, id, foe);
     if (this.kind === "wolverine") {
       const map = { jaguar: "rush", phantom: "barrage", ragemode: "ragemode" };
@@ -357,26 +322,6 @@ export class Fighter {
       const map = { jaguar: "gamma", phantom: "clap", ragemode: "breaker" };
       return tryHulkSpecial(this, map[id] || id, foe);
     }
-    if (this.kind === "ironman") {
-      const map = { jaguar: "burst", phantom: "unibeam", ragemode: "shelling" };
-      return tryIronmanSpecial(this, map[id] || id, foe);
-    }
-    if (this.kind === "thor") {
-      const map = { jaguar: "storm", phantom: "lightning", ragemode: "godblast" };
-      return tryThorSpecial(this, map[id] || id, foe);
-    }
-    if (this.kind === "uroboros") {
-      const map = { jaguar: "wrap", phantom: "rock", ragemode: "impale" };
-      return tryUroborosSpecial(this, map[id] || id, foe);
-    }
-    if (this.kind === "spiderman") {
-      const map = { jaguar: "webshot", phantom: "yank", ragemode: "maelstrom" };
-      return trySpidermanSpecial(this, map[id] || id, foe);
-    }
-    if (this.kind === "doom") {
-      const map = { jaguar: "beam", phantom: "stack", ragemode: "throne" };
-      return tryDoomSpecial(this, map[id] || id, foe);
-    }
     return false;
   }
 
@@ -386,24 +331,24 @@ export class Fighter {
     this.state = FState.ATTACK;
     this.phase = "startup";
     this.phaseT = this.moves[id].startup;
-    this.lungeLeft = this.moves[id].lunge;
+    this.lungeLeft = this.moves[id].lunge; // exact-px travel budget (see below)
     this.hasHit = false;
-    this.rayFired = false;
+    this.rayFired = false; // ray moves (gun) crack the muzzle once per shot
     this.chainQueued = false;
   }
 
+  // Incoming hit. Interrupts everything (including our own attack) and pays
+  // out damage / stun / knockback from the attack's frame data.
   takeHit(move, dir) {
-    const mult = vulnMult(this, move.heat);
-    this.hp = Math.max(0, this.hp - move.damage * mult);
-    this.sinceDamageT = 0;
-    this.webT = 0;
+    this.hp = Math.max(0, this.hp - move.damage);
+    this.sinceDamageT = 0; // healing factor pauses on clean damage
     this.attackId = null;
     this.phase = null;
     this.chainQueued = false;
-    this.specialId = null;
+    this.specialId = null; // specials interrupt like strikes do
     this.special = null;
     this.victim = null;
-    this.crumple = false;
+    this.crumple = false; // a clean hit consumes any pending guard-break
     if (this.hp <= 0) {
       this.state = FState.KO;
       this.knockVX = 0;
@@ -415,6 +360,10 @@ export class Fighter {
     this.knockVX = dir * move.knockback;
   }
 
+  // Special-ender knockdown (called after resolveStrike lands a clean hit):
+  // shoved, then down — grounded victims drop in place, airborne ones fall
+  // first; either way 0.4s prone on the canvas before rising to IDLE.
+  // Interruptable like any stun (hits/grabs still connect — okizeme works).
   knockdown(dir, push, pop = 0, slam = 0) {
     if (this.hp <= 0 || this.state === FState.KO) return;
     this.state = FState.KDOWN;
@@ -426,18 +375,20 @@ export class Fighter {
       this.vy = slam;
       this.grounded = false;
     }
-    this.kT = 0;
+    this.kT = 0; // knockdown clock: fall -> 0.4s lie -> rise (12 frames)
   }
 
+  // Guarded hit (M4): stance and height already verified by combat.js.
+  // No damage from normals (chip reserved for specials, M10/M11), but the
+  // defender is locked in BLOCKSTUN and shoved. Interrupts own attack too.
   takeBlocked(move, dir) {
-    this.webT = 0;
     this.attackId = null;
     this.phase = null;
     this.chainQueued = false;
     this.specialId = null;
     this.special = null;
     this.victim = null;
-    this.crumple = false;
+    this.crumple = false; // normals just shove; specials re-arm it below
     const chip = move.chip || 0;
     if (chip > 0) {
       this.hp = Math.max(0, this.hp - chip);
@@ -456,12 +407,13 @@ export class Fighter {
   land() {
     this.state = FState.LAND;
     this.stateT = MOVE.LAND_LAG;
-    AudioFX.land();
-    Sparks.dust(this.x, GROUND_Y);
+    AudioFX.land(); // M14: boots-on-deck thud...
+    Sparks.dust(this.x, GROUND_Y); // ...and the dirt it kicks up
   }
 
   update(dt, opponent) {
-
+    // Time-stop (level-3 cinematics): pinned — no facing, no physics, no
+    // queued actions leaking through; damage still lands via takeHit.
     if (this.freezeT > 0) {
       this.freezeT -= dt;
       this.jumpQueued = false;
@@ -470,19 +422,9 @@ export class Fighter {
       clampArena(this);
       return;
     }
-    if (this.webT > 0) this.webT -= dt;
-    if (this.zipCD > 0) this.zipCD -= dt;
-    if (this.swingCD > 0) this.swingCD -= dt;
-    if (this.snapCD > 0) this.snapCD -= dt;
-    const webbed = this.webT > 0 && this.hp > 0;
-    if (webbed) {
-      this.jumpQueued = false;
-      this.dashQueued = 0;
-      this.tagRequest = null;
-      this.moving = 0;
-      this.blockHeld = false;
-    }
-
+    // Committed states never turn mid-way (no mid-swing / mid-stun turns).
+    // BLOCK tracks facing (a jump-over can cross you up); stuns, grabs,
+    // victims, and specials don't (scripts set facing explicitly).
     if (
       this.state !== FState.ATTACK &&
       this.state !== FState.SPECIAL &&
@@ -496,18 +438,13 @@ export class Fighter {
       this.faceOpponent(opponent);
     }
     this.animTime += dt;
-
+    // Wolverine healing factor: regen after REGEN.delay without clean damage.
     this.sinceDamageT += dt;
-    if (this.hp > 0 && this.hp < this.maxHp && this.sinceDamageT >= REGEN.delay && this.state !== FState.KO) {
-      if (this.kind === "wolverine") {
-        this.hp = Math.min(this.maxHp, this.hp + REGEN.rate * dt);
-      } else if (this.kind === "wesker" && this.sinceDamageT >= WESKER_REGEN.delay) {
-        this.hp = Math.min(this.maxHp, this.hp + WESKER_REGEN.rate * dt);
-      } else if (this.kind === "uroboros" && this.sinceDamageT >= UROBOROS_REGEN.delay) {
-        this.hp = Math.min(this.maxHp, this.hp + UROBOROS_REGEN.rate * dt);
-      }
+    if (this.kind === "wolverine" && this.hp > 0 && this.hp < this.maxHp &&
+      this.sinceDamageT >= REGEN.delay && this.state !== FState.KO) {
+      this.hp = Math.min(this.maxHp, this.hp + REGEN.rate * dt);
     }
-
+    // Bleed DoT: tick down, brief blood spray per tick.
     if (this.bleedN > 0 && this.hp > 0) {
       this.bleedT -= dt;
       if (this.bleedT <= 0) {
@@ -519,20 +456,9 @@ export class Fighter {
         if (this.hp <= 0) { this.state = FState.KO; this.knockVX = 0; }
       }
     }
-    if (this.decayN > 0 && this.hp > 0) {
-      this.decayT -= dt;
-      if (this.decayT <= 0) {
-        this.decayT = DECAY.interval;
-        this.decayN -= 1;
-        this.sinceDamageT = 0;
-        this.hp = Math.max(0, this.hp - DECAY.per);
-        Sparks.blood(this.x, this.y - 100);
-        Sparks.violet(this.x, this.y - 80);
-        if (this.hp <= 0) { this.state = FState.KO; this.knockVX = 0; }
-      }
-    }
     if (this.rushLowT > 0) this.rushLowT -= dt;
-
+    // Cloth driver: coat/cape flutter phase scales with true motion (rise,
+    // fall speed, ground speed) — the baked cloth variants answer physics.
     const runV = this.state === FState.DASH || this.state === FState.BACKDASH
       ? this.speeds.dashFwd
       : this.state === FState.WALK ? this.speeds.walk
@@ -546,14 +472,12 @@ export class Fighter {
     this.dashQueued = 0;
 
     const startDash = () => {
-
+      // Wesker Shadow Step: S held while double-tapping a direction teleports
+      // instead of dashing (grounded only). Tapped direction = travel — a
+      // wrong-way tap is a self-cross-up, by design.
       if (this.kind === "wesker" && this.crouchHeld && this.grounded &&
         this.state !== "SPECIAL" && this.state !== "ATTACK") {
         if (this.tryShadow(wantDash)) return;
-      }
-      if (this.kind === "spiderman" && !this.grounded &&
-        (this.state === "JUMP" || this.state === "FALL")) {
-        if (this.trySwing(wantDash)) return;
       }
       const toward = opponent.x >= this.x ? 1 : -1;
       if (wantDash === toward) {
@@ -564,7 +488,7 @@ export class Fighter {
         this.dashDir = -toward;
       }
       this.stateT = MOVE.DASH_TIME;
-      AudioFX.whoosh();
+      AudioFX.whoosh(); // M14: burst off the line
       Sparks.dust(this.x, GROUND_Y);
     };
 
@@ -573,7 +497,8 @@ export class Fighter {
         const mv = this.attackMove;
         this.phaseT -= dt;
         if (!this.grounded) {
-
+          // Air swing: gravity never pauses — touchdown cancels the swing
+          // into landing lag (no hovering strikers).
           integrateAir(this, dt);
           if (this.grounded) {
             this.attackId = null;
@@ -584,65 +509,37 @@ export class Fighter {
           }
         }
         if (this.phase === "startup" || this.phase === "active") {
-
+          // Forward lunge, spread over startup + active — clamped to the exact
+          // px budget so faster tempos never gain extra reach from rounding.
           const want = (mv.lunge / (mv.startup + mv.active)) * dt;
           const step = Math.min(want, this.lungeLeft);
           this.x += this.attackDir * step;
           this.lungeLeft -= step;
           if (this.phase === "active" && mv.ray && !this.rayFired) {
-            this.rayFired = true;
-            if (this.attackId === "repulsor" || this.attackId === "photon") {
-
-              AudioFX.repulsor();
-              Sparks.muzzle(this.x + this.attackDir * 45, this.y - 117, this.attackDir);
-            } else if (this.attackId === "hammer") {
-              AudioFX.thunder();
-              Sparks.muzzle(this.x + this.attackDir * 45, this.y - 125, this.attackDir);
-            } else {
-              AudioFX.shot();
-              Sparks.muzzle(this.x + this.attackDir * 51, this.y - 130, this.attackDir);
-            }
+            this.rayFired = true; // one crack per shot: muzzle flash + report
+            AudioFX.shot();
+            Sparks.muzzle(this.x + this.attackDir * 51, this.y - 130, this.attackDir);
           }
           if (this.phase === "active" && !this.hasHit) {
             const contact = resolveStrike(this, opponent, mv);
-            if (contact) {
-              this.hasHit = true;
-              if (this.kind === "uroboros" && contact.type === "hit") {
-                // tentacle massacre: victim keeps bleeding holes, ground stays stained
-                opponent.goreMarks = Math.min(6, (opponent.goreMarks || 0) + 1);
-                Sparks.gore(opponent.x, opponent.y - 90);
-                Sparks.pool(opponent.x, GROUND_Y);
-                this.camKick = Math.max(this.camKick, 0.3);
-              }
-            }
-            if (this.kind === "uroboros" && !this.hasHit) {
-              // sweep trail: tentacle tip leaves a bloody streak mid-swing
-              const tipX = this.x + this.attackDir * (mv.hit.w / 2 + 20);
-              if (Math.random() < 0.6) Sparks.violet(tipX, this.y - 70 - Math.random() * 40);
-              if (Math.random() < 0.3) Sparks.blood(tipX, this.y - 80);
-            }
+            if (contact) this.hasHit = true; // one swing, one touch (hit OR block)
           }
         }
         if (this.phaseT <= 0) {
           if (this.phase === "startup") {
             this.phase = "active";
             this.phaseT = mv.active;
-            if (this.kind === "wolverine") AudioFX.slash();
-            if (this.kind === "uroboros") {
-              AudioFX.whoosh();
-              AudioFX.squelch();
-              Sparks.slash(this.x + this.attackDir * (mv.hit.w / 2), this.y - 80, this.attackDir);
-            }
+            if (this.kind === "wolverine") AudioFX.slash(); // claws rip out
           } else if (this.phase === "active") {
-            if (!this.hasHit) AudioFX.whiff();
+            if (!this.hasHit) AudioFX.whiff(); // M14: swung at nothing
             this.phase = "recovery";
             this.phaseT = mv.recovery;
           } else if (this.chainQueued && mv.chainTo) {
-            this.startAttack(mv.chainTo);
+            this.startAttack(mv.chainTo); // seamless combo link
           } else {
             this.attackId = null;
             this.phase = null;
-
+            // A swing that ends mid-air falls — never hovers in IDLE.
             this.state = this.grounded ? FState.IDLE : FState.FALL;
           }
         }
@@ -650,30 +547,33 @@ export class Fighter {
       }
       case FState.HITSTUN:
       case FState.BLOCKSTUN: {
-
+        // Shared slide: friction on the ground, gravity carry in the air.
+        // (Only grounded guards can block, so air BLOCKSTUN shouldn't happen
+        // — the branch below handles it anyway instead of crashing.)
         this.stateT -= dt;
         this.x += this.knockVX * dt;
         if (this.grounded) {
-
+          // Ground friction bleeds the slide (exponential damp).
           this.knockVX *= Math.exp(-8 * dt);
           if (Math.abs(this.knockVX) < 5) this.knockVX = 0;
         } else {
-          integrateAir(this, dt);
+          integrateAir(this, dt); // launched mid-jump: keep falling
         }
         if (this.stateT <= 0) {
           if (!this.grounded) {
-
+            // Expired mid-air -> keep falling as FALL.
             this.knockVX = 0;
             this.state = FState.FALL;
           } else if (this.state === FState.BLOCKSTUN && this.crumple) {
-
+            // A blocked special broke the guard: the shove carries straight
+            // into the fall (slide kept, 12-frame knockdown runs).
             this.crumple = false;
             this.state = FState.KDOWN;
             this.kT = 0;
           } else {
             this.knockVX = 0;
             if (this.blockHeld) {
-
+              // Still holding AWAY -> straight back to guard (any range).
               this.state = FState.BLOCK;
               this.blockLow = this.crouchHeld;
             } else {
@@ -684,7 +584,8 @@ export class Fighter {
         break;
       }
       case FState.KDOWN: {
-
+        // 12-frame knockdown: tip-over, 0.4s flat-out, getup. Air falls with
+        // gravity first (touchdown skips straight to the slam frame + dust).
         this.x += this.knockVX * dt;
         if (this.grounded) {
           this.knockVX *= Math.exp(-8 * dt);
@@ -695,9 +596,9 @@ export class Fighter {
             this.state = FState.IDLE;
           }
         } else {
-          integrateAir(this, dt);
+          integrateAir(this, dt); // launched/slammed: keep falling
           if (this.grounded) {
-            this.kT = MOVE.KDOWN_FALL;
+            this.kT = MOVE.KDOWN_FALL; // land on the slam frame
             this.knockVX *= 0.5;
             AudioFX.land();
             Sparks.dust(this.x, GROUND_Y);
@@ -706,15 +607,16 @@ export class Fighter {
         break;
       }
       case FState.KO: {
-        if (!this.grounded) integrateAir(this, dt);
+        if (!this.grounded) integrateAir(this, dt); // crumple to the ground
         break;
       }
       case FState.SPECIAL: {
-        updateSpecial(this, opponent, dt);
+        updateSpecial(this, opponent, dt); // scripted super (specials.js)
         break;
       }
       case FState.GRAB: {
-
+        // Startup (hittable) -> active seizure window -> carry the victim ->
+        // toss (damage + launch) or whiff recovery. Direction locked throughout.
         this.phaseT -= dt;
         const grabStep = Math.min((GRAB.lunge / (GRAB.startup + GRAB.active)) * dt, this.lungeLeft);
         if (this.phase === "startup") {
@@ -734,21 +636,22 @@ export class Fighter {
             this.phase = "carry";
             this.phaseT = GRAB.carry;
           } else if (this.phaseT <= 0) {
-            this.phase = "recover";
+            this.phase = "recover"; // whiffed: stand there regretting it
             this.phaseT = GRAB.recover;
-            AudioFX.whiff();
+            AudioFX.whiff(); // M14: grabbed a ghost
           }
         } else if (this.phase === "carry") {
-
+          // Drag the victim at arm's length, slightly lifted off the ground.
           if (this.victim) {
             this.victim.x = this.x + this.attackDir * 44;
             this.victim.y = Math.min(this.victim.y, GROUND_Y - 26);
           }
           if (this.phaseT <= 0) {
-
+            // Toss: pay damage + launch through the stun/air pipeline.
+            // Throws build rage like strikes (deal + take rates).
             if (this.victim) {
-              const vx = this.victim.x, vy = this.victim.y - 90;
-
+              const vx = this.victim.x, vy = this.victim.y - 90; // pre-toss pos
+              // Hulk crush: +4 toss damage (the wall throws back harder).
               const tossDmg = this.kind === "hulk" ? GRAB.damage + 4 : GRAB.damage;
               this.victim.takeHit(
                 { damage: tossDmg, hitstun: GRAB.stun, knockback: GRAB.knockback },
@@ -758,15 +661,15 @@ export class Fighter {
               this.victim.grounded = false;
               this.addRage(RAGE.onDealHit);
               this.victim.addRage(RAGE.onTakeHit);
-              Sparks.blood(vx, vy);
+              Sparks.blood(vx, vy); // M14: the throw lands with a spray
               this.victim = null;
             }
             AudioFX.hit();
-            this.camKick = Math.max(this.camKick, 0.3);
+            this.camKick = Math.max(this.camKick, 0.3); // M14: toss shakes cam
             this.phase = "toss";
             this.phaseT = GRAB.toss;
           }
-        } else {
+        } else { // "toss" follow-through / "recover" whiff — both committed
           if (this.phaseT <= 0) {
             this.phase = null;
             this.victim = null;
@@ -776,7 +679,9 @@ export class Fighter {
         break;
       }
       case FState.THROWN: {
-
+        // Positioned by the grabber each frame; the safety below guarantees
+        // we can never be stuck here if the hold breaks unexpectedly.
+        // (Cinematic supers hold through SPECIAL too — see M11 rage modes.)
         this.holdT -= dt;
         if (this.holdT <= 0 || !this.heldBy ||
           (this.heldBy.state !== FState.GRAB && this.heldBy.state !== FState.SPECIAL)) {
@@ -786,7 +691,10 @@ export class Fighter {
         break;
       }
       case FState.BLOCK: {
-
+        // MVC3 walkable guard: height follows S every frame; holding AWAY
+        // keeps the guard up AND retreats — backward walk never drops it.
+        // Forward input is ignored (no advancing while guarding). Jump and
+        // dash can still cancel guard. Releasing AWAY drops to neutral.
         this.blockLow = this.crouchHeld;
         if (wantJump) {
           this.state = FState.JUMP;
@@ -805,7 +713,7 @@ export class Fighter {
         } else {
           const toward = opponent.x >= this.x ? 1 : -1;
           if (this.moving === -toward) {
-            this.blockRetreating = !this.blockLow;
+            this.blockRetreating = !this.blockLow; // stand-guard shuffle anim
             this.x += this.moving * this.speeds.walk * MOVE.BACKPEDAL_MULT * dt;
           } else {
             this.blockRetreating = false;
@@ -820,10 +728,9 @@ export class Fighter {
           else if (this.stateT <= 0) {
             this.vy = -MOVE.JUMP_VEL;
             this.grounded = false;
-            Sparks.dust(this.x, GROUND_Y);
+            Sparks.dust(this.x, GROUND_Y); // M14: takeoff kick-up
           }
         } else {
-          if (wantDash && this.kind === "spiderman") { startDash(); break; }
           if (this.moving !== 0) this.x += this.moving * this.speeds.air * dt;
           integrateAir(this, dt);
           if (this.vy >= 0) this.state = FState.FALL;
@@ -832,7 +739,6 @@ export class Fighter {
         break;
       }
       case FState.FALL: {
-        if (wantDash && this.kind === "spiderman") { startDash(); break; }
         if (this.moving !== 0) this.x += this.moving * this.speeds.air * dt;
         integrateAir(this, dt);
         if (this.grounded) this.land();
@@ -848,7 +754,7 @@ export class Fighter {
         const speed = this.state === FState.DASH ? this.speeds.dashFwd : this.speeds.dashBack;
         this.x += this.dashDir * speed * dt;
         this.stateT -= dt;
-
+        // A dash that ends mid-air falls — never hovers in IDLE.
         if (this.stateT <= 0) this.state = this.grounded ? FState.IDLE : FState.FALL;
         break;
       }
@@ -859,7 +765,8 @@ export class Fighter {
         } else if (wantDash) {
           startDash();
         } else if (this.blockHeld) {
-
+          // Holding AWAY guards at any range (walkable guard — BLOCK itself
+          // retreats, so no out-of-range walk branch is needed).
           this.state = FState.BLOCK;
           this.blockLow = this.crouchHeld;
         } else if (this.crouchHeld) {
@@ -871,7 +778,7 @@ export class Fighter {
           }
         } else if (this.moving !== 0) {
           this.state = FState.WALK;
-
+          // Backpedal penalty: retreating from the foe is slower than advancing.
           const toward = opponent.x >= this.x ? 1 : -1;
           const mult = this.moving === -toward ? MOVE.BACKPEDAL_MULT : 1;
           this.x += this.moving * this.speeds.walk * mult * dt;
@@ -881,7 +788,8 @@ export class Fighter {
         break;
       }
     }
-
+    // Gravity net: grounded-only states can never hover — whatever put us
+    // here (attack/dash ending mid-air, a crossed-up edge), fall for real.
     if (!this.grounded) {
       if (this.state === FState.IDLE || this.state === FState.WALK ||
         this.state === FState.CROUCH || this.state === FState.SNEAK ||
@@ -893,28 +801,26 @@ export class Fighter {
     clampArena(this);
   }
 
+  // Airborne look, read straight off physics every frame: rising picks the
+  // billow frame, the apex hangs, falling streams, and fast falls flutter —
+  // cloth phase runs off real speed (vy + horizontal drift), so coat and
+  // cape answer motion instead of looping on a timer.
   airFrame(s) {
-    if (this.vy < -150) return s.jump[1];
+    if (this.vy < -150) return s.jump[1]; // rise: cloth billowing up
     if (this.vy > 150) {
       if (this.vy > 500) return Math.floor(this.clothP * 6) % 2 ? s.jump[4] : s.jump[3];
-      return s.jump[3];
+      return s.jump[3]; // fall: cloth trailing
     }
-    return s.jump[2];
+    return s.jump[2]; // apex hang
   }
 
   currentFrame() {
     const s = this.sprites;
     switch (this.state) {
       case FState.ATTACK: {
-
+        // Phase-driven animation from the fighter's own kit table (M8).
         const kit = FRAME_FOR[this.kind] ?? FRAME_FOR.wesker;
         const fr = kit[this.attackId] ?? kit.light1;
-        if (this.kind === "spiderman" && this.phase === "active") {
-          const flick = Math.floor(this.animTime * 14) % 2 === 0;
-          const alt = fr.recovery === fr.active ? fr.startup : fr.recovery;
-          const idx = flick ? fr.active : alt;
-          return s.attack[idx] ?? s.attack[fr.active];
-        }
         const idx = this.phase === "startup" ? fr.startup
           : this.phase === "active" ? fr.active : fr.recovery;
         return s.attack[idx];
@@ -926,48 +832,47 @@ export class Fighter {
       case FState.SNEAK:
         return s.sneak[Math.floor(this.animTime * 6) % s.sneak.length];
       case FState.JUMP:
-        return this.grounded ? s.jump[0] : this.airFrame(s);
+        return this.grounded ? s.jump[0] : this.airFrame(s); // anticip, then vy-read
       case FState.FALL:
         return this.airFrame(s);
       case FState.LAND:
-        return s.jump[0];
+        return s.jump[0]; // crouched gather, cloth settling
       case FState.HITSTUN:
-        return s.jump[3];
+        return s.jump[3]; // reeling fall (judder + sparks sell the hit)
       case FState.KDOWN: {
-
-        if (!this.grounded) return s.jump[3];
+        // 12-frame arc: 0-3 tip-over, 4-7 flat-out, 8-11 getup.
+        if (!this.grounded) return s.jump[3]; // still falling
         const F = MOVE.KDOWN_FALL, L = MOVE.KDOWN_TIME, R = MOVE.KDOWN_RISE;
         const e = this.kT || 0;
         let i;
         if (e < F) i = Math.min(3, Math.floor((e / F) * 4));
-
         else if (e < F + L) i = 4 + Math.min(3, Math.floor(((e - F) / L) * 4));
         else i = 8 + Math.min(3, Math.floor(((e - F - L) / R) * 4));
         return s.kdown[i];
       }
       case FState.SPECIAL:
-
+        // Assigned per-tick by the running script (specials.js).
         return (this.special && this.special.frame) || s.idle[0];
       case FState.GRAB:
-
+        // Reach through seizure + carry; toss effort per fighter.
         if (this.phase === "toss") {
-          if (this.kind === "hulk") return s.attack[27];
+          if (this.kind === "hulk") return s.attack[27]; // overhead slam effort
           return this.kind === "homelander" ? s.strain[0] : s.attack[5];
         }
         return s.grab[0];
       case FState.THROWN:
-        return s.jump[1];
+        return s.jump[1]; // tucked rise: hoisted off the ground
       case FState.BLOCK:
       case FState.BLOCKSTUN: {
-        if (this.blockLow) return s.block[1];
-
+        if (this.blockLow) return s.block[1]; // crouch guard holds still
+        // Block-walk: walk-cycle legs, played slow + reversed for retreat.
         if (this.state === FState.BLOCK && this.blockRetreating && s.block.length >= 4) {
           return s.block[3 - (Math.floor(this.animTime * 5) % 2)];
         }
-        return s.block[0];
+        return s.block[0]; // guard held through the shove
       }
       case FState.KO:
-        return s.crouch[1];
+        return s.crouch[1]; // crumpled (full KO presentation is M15)
       case FState.DASH:
       case FState.BACKDASH:
         return s.dash[Math.floor(this.animTime * 16) % s.dash.length];
@@ -978,88 +883,18 @@ export class Fighter {
 
   draw(ctx, camX) {
     const frame = this.currentFrame();
-
+    // Wolverine spin strikes (menu toggle): he physically turns around
+    // through the swing — active + recovery render mirrored vs facing.
+    // Purely visual: attackDir/hitboxes stay locked, gameplay untouched.
     const spun = this.kind === "wolverine" && SETTINGS.wolvieSpin &&
       this.state === FState.ATTACK && (this.phase === "active" || this.phase === "recovery");
-    const spideySpin = this.kind === "spiderman" && this.state === FState.ATTACK &&
-      (this.attackId === "light2" || this.attackId === "heavy" || this.attackId === "airLight") &&
-      this.phase === "active" && Math.floor(this.animTime * 14) % 2 === 1;
-    const face = spun || spideySpin ? -this.facing : this.facing;
+    const face = spun ? -this.facing : this.facing;
     const img = face === 1 ? frame : flipped(frame);
-
+    // Impact judder while stunned: sells the hit/block without new sprites.
     const stunned = this.state === FState.HITSTUN || this.state === FState.BLOCKSTUN;
     const judder = stunned ? Math.round(Math.sin(this.animTime * 90) * 2) : 0;
-    const spideyLift = this.kind === "spiderman" && this.state === FState.ATTACK &&
-      (this.phase === "active" || this.phase === "recovery") &&
-      (this.attackId === "light2" || this.attackId === "heavy" || this.attackId === "light1") ? 8 : 0;
     const dx = Math.round(this.x - camX - this.w / 2) + judder;
-    const dy = Math.round(this.y - this.h + FEET_PAD * SPRITE_SCALE) - spideyLift;
+    const dy = Math.round(this.y - this.h + FEET_PAD * SPRITE_SCALE);
     ctx.drawImage(img, dx, dy, this.w, this.h);
-    this.drawGore(ctx, dx, dy);
-    this.drawWebs(ctx, dx, dy);
-  }
-
-  drawWebs(ctx, dx, dy) {
-    if (!(this.webT > 0) || this.state === "KO") return;
-    const fade = this.webT < 0.2 ? 0.5 : 1;
-    ctx.save();
-    ctx.globalAlpha = fade;
-    const u = Math.max(2, Math.round(this.w / 48));
-    const bands = [
-      [0.30, 0.30, 0.40, 2], [0.32, 0.42, 0.36, 2], [0.30, 0.54, 0.40, 2],
-      [0.36, 0.18, 0.28, 2], [0.44, 0.30, 2, 10],
-    ];
-    for (const [fx, fy, fw, fh] of bands) {
-      const bx = Math.round(dx + this.w * fx);
-      const by = Math.round(dy + this.h * fy);
-      const bw = fw < 5 ? Math.round(this.w * fw) : fw * u;
-      const bh = fh * u;
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(bx, by, bw, bh);
-      ctx.fillStyle = "#9fd4ff";
-      ctx.fillRect(bx, by + Math.max(1, bh - 1), bw, 1);
-      ctx.fillStyle = "#5a6a7a";
-      for (let sx = 2; sx < bw - 1; sx += 4) ctx.fillRect(bx + sx, by, 1, bh);
-    }
-    ctx.restore();
-  }
-
-  drawGore(ctx, dx, dy) {
-    // persistent wound pits: victims scarred by uroboros keep holes; uroboros
-    // itself festers as it loses HP. Deterministic spots so they don't crawl.
-    let marks = Math.min(6, this.goreMarks || 0);
-    if (this.kind === "uroboros" && this.hp < this.maxHp) {
-      marks = Math.max(marks, Math.min(3, Math.ceil((1 - this.hp / this.maxHp) * 3)));
-    }
-    if (marks <= 0 || this.state === "KO") return;
-    const SPOTS = [
-      [0.44, 0.34, 3], [0.58, 0.44, 2], [0.48, 0.55, 3],
-      [0.56, 0.30, 2], [0.42, 0.47, 2], [0.52, 0.62, 3],
-    ];
-    const u = Math.max(2, Math.round(this.w / 48));
-    for (let i = 0; i < Math.min(marks, SPOTS.length); i++) {
-      let [fx, fy, r] = SPOTS[i];
-      if (this.facing === -1) fx = 1 - fx;
-      const px = Math.round(dx + this.w * fx);
-      const py = Math.round(dy + this.h * fy);
-      const s = r >= 3 ? u + 1 : u;
-      ctx.fillStyle = "#0b0b10";
-      ctx.fillRect(px - s, py - s, s * 2, s * 2);
-      ctx.fillStyle = "#c01414";
-      ctx.fillRect(px - s, py - s, s * 2, 1);
-      ctx.fillRect(px - s, py + s - 1, s * 2, 1);
-      ctx.fillRect(px - s, py - s, 1, s * 2);
-      ctx.fillRect(px + s - 1, py - s, 1, s * 2);
-      if (this.kind === "uroboros") {
-        ctx.fillStyle = "#ff7a1a";
-        ctx.fillRect(px, py, 1, 1);
-      }
-      // drip below deep holes
-      if (r >= 3) {
-        ctx.fillStyle = "#7a1016";
-        ctx.fillRect(px, py + s, 1, s + 2);
-      }
-    }
   }
 }
-

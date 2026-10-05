@@ -275,31 +275,12 @@
 Post-M15 systems (built, headless-verified):
 - Wolverine (4th fighter): chip+bleed rushdown, regen, rush/barrage/surge supers.
 - Wesker Shadow Step (S + double-tap): spammable 320px manual teleport, black-purple aura.
-- Uroboros (7th fighter, HIDDEN): type `uroboros` on the menu to unlock (localStorage). Shirtless tentacle Wesker, LARGE 1.32x, 1.35/1.45 stats, 37.8 chain, slow regen, wrap/rock/impale supers (10+30 decay, permanent vuln 1.10x / 1.25x heat), no shadow/edge.
-- LAN netplay (`net/relay.js` + `js/net/`): host sims, guest renders snapshots over zero-dep WS relay. HOST/JOIN on menu, direct IP. `node net/relay.js 8125` + `python -m http.server` on host; guest opens `http://<host-ip>:8000`.
 - Rebalance: Wesker speedster (1.30/1.35, 0.90 melee-only) / Homelander denerfed
   (faster jab+laser, wider scream) / Wolverine taxed (chip halved, regen 2.0/s).
 - Teams relay (SOLO/DUO/TRIO draft), paid mid-battle tags (X/C, half-bar fee),
   best-of-3 rounds, 99s timer. Pure logic in `js/match.js` + tests.
-- Hulk (5th fighter, LARGE 1.32x frame): 0.95/0.85/1.35/1.35, ~29.7 chain,
+- Hulk (5th fighter, LARGE 1.32x frame): 0.80/0.85/1.35/1.35, ~29.7 chain,
   +4 grab toss, gamma/clap/breaker supers, size-aware hurtboxes/hitboxes.
-- Iron Man (6th fighter, long-range zoner): 1.00/0.95/0.95/1.00, ~18.05 chain,
-  free E-key repulsor poke (no i-frames, never from stun, crouch ducks it),
-  burst/unibeam/shelling supers (shelling marks are dodgeable), blue beams,
-  keep-away AI (first brain that retreats).
-- AI overhaul: AI_PROFILE rows per kind (new fighters = one data row, zero
-  logic), Medium gets anti-air meets + clock-aware tag camping, Extreme gets
-  ray sneak-ducks, Wesker teleport blitzes, and per-matchup answers
-  (backdash Hulk, dash in on repulsor/laser recovery, stuff shadow vanish).
-  No-cheat contract enforced by tests/ai.test.mjs (public tells only).
-  CPU DRAFT button counter-picks P2's team via EDGE matrix (match.js).
-- Maps Level 1 (art depth, engine untouched): shared js/maps/draw.js helpers
-  (bands, glows, godrays, grades, haze, vignette, seeded scatter, parallax
-  layer loop); forest gains canopy/ruins/fireflies/rubble/ferns, lab gains
-  specimen tanks/pipe runs/consoles/steam/stuttering fluorescents/emergency
-  lights, city gains skyline/overpass/billboard/facades/street fires/traffic
-  lights/manhole steam; foreground occluders + per-stage grades on all three.
-  Covered by tests/maps.test.mjs (full-frame, deterministic, random valid).
 
 Current focus: **Milestone 15 — Final Game Loop (rounds, timer, HUD, rematch)**.
 M1–M14 complete (M5 skipped/deferred). This is the last milestone.

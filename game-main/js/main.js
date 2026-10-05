@@ -1,3 +1,10 @@
+// Entry point: game states, main loop, scene composition.
+// M2 scope: menus + scene with movement state machines (walk / crouch /
+// sneak / jump / dash), camera, map, particles. No damage or AI yet.
+//
+// JS concept vs Python: ES modules use `import`/`export` (static, resolved by
+// the browser). `requestAnimationFrame(loop)` is the browser's vsync game-loop
+// clock — unlike Python's `while True`, it yields to the browser each frame.
 import { VIEW_W, VIEW_H, STATE, GROUND_Y, MOVE } from "./config.js";
 import { arena, setArena, arenaCenter } from "./arena.js";
 import { initInput, keys } from "./input.js";
@@ -8,265 +15,54 @@ import { pickMap, MAPS } from "./maps/index.js";
 import { separate } from "./physics.js";
 import { Hitstop, hurtboxOf, hitboxOf } from "./combat/combat.js";
 import { RAGE } from "./combat/data.js";
-import { Particles, drawShadow, Sparks, Clones, Beams, Missiles, Bolts, FlyingHammer, WebLines } from "./effects.js";
+import { Particles, drawShadow, Sparks, Clones, Beams, Missiles } from "./effects.js";
 import { initScreens } from "./ui/screens.js";
-import { pushCode, isUroborosUnlocked, unlockUroboros } from "./ui/unlock.js";
 import { buildPortrait } from "./render/sprites.js";
 import { CHARACTERS } from "./characters/data.js";
 import { AudioFX } from "./audio.js";
-import { connectNet, relayURL, lastNetIP, saveNetIP } from "./net/client.js";
-import { snapFighter, applyFighter, frameOf, frameFor, armSfxCapture } from "./net/sync.js";
 import { createMatch, activeKind, benchKinds, onKO, awardRound, timeoutWinner, tagTarget, saveSlot, loadSlot, ROUND_TIME } from "./match.js";
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
-ctx.imageSmoothingEnabled = false;
+ctx.imageSmoothingEnabled = false; // crisp pixels everywhere
 
 const sel = { p1: ["wesker", "wolverine"], p2: ["homelander", "wolverine"], teamSize: 2, diff: "medium" };
 let state = STATE.MENU;
 let map = MAPS.forest;
-let ai = null;
-let match = createMatch(sel.p1, sel.p2);
+let ai = null; // M12 CPU pilot for P2 (null = second human drives P2)
+let match = createMatch(sel.p1, sel.p2); // relay teams + best-of-3 score
 const DIFF_LABEL = Object.freeze({ easy: "EASY", medium: "MEDIUM", extreme: "EXTREME", "2p": "2P VERSUS" });
-
+// Ambient FX are owned by the map (M13): kind/count come from map data and
+// cover the live arena width, not a hardcoded strip.
 let particles = new Particles(map.particles.kind, map.particles.count, { w: arena.width, h: VIEW_H });
 let p1 = new Fighter(activeKind(match.p1), arenaCenter() - 120, GROUND_Y);
 let p2 = new Fighter(activeKind(match.p2), arenaCenter() + 120, GROUND_Y);
 const cam = new Camera();
 let elapsed = 0;
-
+// M14 KO presentation + M15 match flow: koSeen arms on a finishing blow,
+// koT runs the slow-mo, then `pending` executes (tag-in / next round / match).
 let koSeen = false, koT = 0, pending = null;
-let roundTime = ROUND_TIME;
-let announce = null;
-
+let roundTime = ROUND_TIME; // per-round countdown; frozen during KO slow-mo
+let announce = null; // { text, t }: center banner (tag-ins, rounds, time)
+// Cached HUD head portraits (32px canvases) — built once per match.
 let hudPort = null;
-
+// Previous frame's key set: comparing with `keys` gives us edge-triggered
+// presses (jump, taps) while holds (walk, crouch) just read the live set.
+// JS concept vs Python: `new Set(keys)` copies the set — like `set(keys)`.
 let prevKeys = new Set();
-
+// Double-tap trackers, one per fighter: { key, t } of the last direction tap.
 let tap1 = { key: null, t: -9 };
 let tap2 = { key: null, t: -9 };
 
-// ---- LAN netplay (host sims, guest renders snapshots) ----
-const net = {
-  mode: "off", // off | host | guest
-  api: null,
-  guestOn: false,
-  keys: new Set(), // latest guest P2 keys (host-side)
-  prev: new Set(),
-  snap: null, // latest snapshot (guest-side)
-  sfx: [],
-  disarmSfx: null,
-  guestKinds: "",
-  lastKeys: null, // last input payload sent (guest dedup)
-  snapTimes: [], // recent snapshot arrival times (link-rate meter)
-  linkTick: 0,
-};
-
-function netStatus(txt) {
-  const el = document.getElementById("net-status");
-  if (el) {
-    el.textContent = txt;
-    el.classList.toggle("hidden", !txt);
-  }
-}
-
-function teardownNet() {
-  if (net.disarmSfx) {
-    net.disarmSfx();
-    net.disarmSfx = null;
-  }
-  if (net.api) {
-    net.api.close();
-    net.api = null;
-  }
-  net.mode = "off";
-  net.guestOn = false;
-  net.snap = null;
-  net.guestKinds = "";
-  netStatus("");
-  document.getElementById("net-drop")?.classList.add("hidden");
-}
-
-function hostLabel() {
-  document.getElementById("fight-label").textContent =
-    `${map.name} — HOSTING (P1 you) — guest ${net.guestOn ? "CONNECTED" : "waiting…"}`;
-}
-
-function onNetMsg(m) {
-  if (m.t === "role") {
-    if (m.role === "host" && netWanted === "host") {
-      net.mode = "host";
-      net.disarmSfx = armSfxCapture(AudioFX, net.sfx);
-      netStatus("hosting — waiting for guest P2…");
-    } else if (m.role === "guest" && netWanted === "guest") {
-      net.mode = "guest";
-      netStatus("connected! now START a fight on the host (START → fighters → map)");
-    } else {
-      netStatus(m.role === "host" ? "relay already has a host — reload to retry" : "relay already has a guest — reload to retry");
-      net.api?.close();
-      net.api = null;
-    }
-    return;
-  }
-  if (m.t === "peer" && net.mode === "host") {
-    net.guestOn = !!m.on;
-    if (!m.on) {
-      ai = new AIController("medium");
-      net.keys = new Set();
-      net.prev = new Set();
-    }
-    if (state === STATE.FIGHT) hostLabel();
-    else netStatus(m.on ? "guest connected! press START, pick fighters + map" : "hosting — waiting for guest P2…");
-    return;
-  }
-  if (m.t === "in" && net.mode === "host") {
-    net.keys = new Set(Array.isArray(m.keys) ? m.keys : []);
-    net.guestOn = true;
-    return;
-  }
-  if (m.t === "snap" && net.mode === "guest") {
-    net.snap = m;
-    net.snapTimes.push(performance.now());
-    return;
-  }
-  if (m.t === "bye" && net.mode === "guest") {
-    netDrop("host left — back to menu");
-    return;
-  }
-  if (m.t === "drop") {
-    if (net.mode === "guest") netDrop("connection lost — back to menu");
-    else if (net.mode === "host") {
-      net.guestOn = false;
-      ai = new AIController("medium");
-      if (state === STATE.FIGHT) hostLabel();
-      else netStatus("guest left — hosting…");
-    }
-  }
-}
-
-let netWanted = null;
-
-function netConnect(want, ip) {
-  teardownNet();
-  netWanted = want;
-  saveNetIP(want === "guest" ? ip || "" : lastNetIP());
-  const port = Number(document.getElementById("net-port")?.value || 8125) || 8125;
-  const url = relayURL(ip || "localhost", port);
-  const onLinkFail = () => {
-    if (net.api) {
-      net.api.close();
-      net.api = null;
-    }
-    net.mode = "off";
-    netWanted = null;
-    netStatus(
-      want === "host"
-        ? "relay not found — run this first:  node net/relay.js 8125"
-        : `can't reach ${url} — check IP, port, and that the host runs the relay`
-    );
-  };
-  net.api = connectNet(url, onNetMsg, onLinkFail);
-  netStatus(want === "host" ? "starting relay link…" : `connecting to ${ip || "localhost"}…`);
-}
-
-function netDrop(msg) {
-  teardownNet();
-  state = STATE.MENU;
-  screens.show("screen-menu");
-  netStatus(msg);
-  const drop = document.getElementById("net-drop");
-  if (drop) {
-    drop.textContent = msg;
-    drop.classList.remove("hidden");
-    setTimeout(() => drop.classList.add("hidden"), 3000);
-  }
-  setTimeout(() => netStatus(""), 3000);
-}
-
-function buildSnap() {
-  return {
-    t: "snap",
-    mapId: map.id,
-    p1: snapFighter(p1, frameOf(p1)),
-    p2: snapFighter(p2, frameOf(p2)),
-    fx: {
-      beams: Beams.list.map((b) => ({ x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2, t: b.t, life: b.life, color: b.color })),
-      weblines: WebLines.list.map((l) => ({ x1: l.x1, y1: l.y1, x2: l.x2, y2: l.y2, t: l.t, life: l.life })),
-      missiles: Missiles.list.map((m) => ({ sx: m.sx, sy: m.sy, tx: m.tx, ty: m.ty, t: m.t, fall: m.fall })),
-      bolts: Bolts.list.map((b) => ({ segs: [...b.segs], yGround: b.yGround, yTop: b.yTop, t: b.t, life: b.life })),
-      hammer: FlyingHammer.cur ? { ...FlyingHammer.cur } : null,
-    },
-    sfx: net.sfx.splice(0, net.sfx.length),
-    m: JSON.parse(JSON.stringify({
-      p1: match.p1, p2: match.p2, round: match.round, target: match.target,
-      tagCD: match.tagCD, over: match.over, winner: match.winner,
-    })),
-    roundTime, koSeen, koT, hitstop: Hitstop.t,
-    announce: announce ? { ...announce } : null,
-    trauma: cam.trauma,
-  };
-}
-
-function guestFrameIdx(f, idx) {
-  f._netFrame = idx;
-}
-
-function applySnap(m) {
-  if (!m || m.t !== "snap") return;
-  if (!map || map.id !== m.mapId) {
-    map = pickMap(m.mapId);
-    setArena(map.width);
-    particles = new Particles(map.particles.kind, map.particles.count, { w: arena.width, h: VIEW_H });
-  }
-  match = m.m;
-  roundTime = m.roundTime;
-  koSeen = !!m.koSeen;
-  koT = m.koT || 0;
-  pending = null;
-  announce = m.announce;
-  Hitstop.t = m.hitstop || 0;
-  cam.trauma = m.trauma || 0;
-  if (!p1 || p1.kind !== m.p1.kind) p1 = new Fighter(m.p1.kind, m.p1.x, GROUND_Y);
-  if (!p2 || p2.kind !== m.p2.kind) p2 = new Fighter(m.p2.kind, m.p2.x, GROUND_Y);
-  applyFighter(p1, m.p1);
-  applyFighter(p2, m.p2);
-  guestFrameIdx(p1, m.p1.frameIdx);
-  guestFrameIdx(p2, m.p2.frameIdx);
-  Beams.list = (m.fx.beams || []).map((b) => ({ ...b }));
-  WebLines.list = (m.fx.weblines || []).map((l) => ({ ...l }));
-  Missiles.list = (m.fx.missiles || []).map((x) => ({ ...x }));
-  Bolts.list = (m.fx.bolts || []).map((b) => ({ ...b, segs: [...b.segs] }));
-  if (m.fx.hammer) FlyingHammer.show(m.fx.hammer.x, m.fx.hammer.y, m.fx.hammer.dir);
-  else FlyingHammer.hide();
-  for (const name of m.sfx || []) {
-    try {
-      const fn = AudioFX[name];
-      if (typeof fn === "function") fn.call(AudioFX);
-    } catch { /* ignore */ }
-  }
-  const key = `${p1.kind}>${match.p1.idx}|${p2.kind}>${match.p2.idx}|${match.p1.team.length},${match.p2.team.length}`;
-  if (key !== net.guestKinds) {
-    net.guestKinds = key;
-    refreshHudPortraits();
-  }
-  if (state !== STATE.FIGHT) {
-    state = STATE.FIGHT;
-    screens.show(null);
-    document.getElementById("fight-bar").classList.remove("hidden");
-    document.getElementById("fight-label").textContent = `${map.name} — GUEST (P2 you)`;
-  }
-}
-
 function enterFight(mapId) {
   map = pickMap(mapId);
-  setArena(map.width);
+  setArena(map.width); // install this stage's collision bounds (M13)
   particles = new Particles(map.particles.kind, map.particles.count, { w: arena.width, h: VIEW_H });
-  resetMatch();
+  resetMatch(); // fresh teams (from select), score, clock, AI pilot, cleared FX
   state = STATE.FIGHT;
-  screens.show(null);
+  screens.show(null); // hide DOM overlays, reveal fight toolbar via class toggle
   document.getElementById("fight-bar").classList.remove("hidden");
-  if (net.mode === "host") hostLabel();
-  else document.getElementById("fight-label").textContent =
+  document.getElementById("fight-label").textContent =
     `${map.name} — CPU ${DIFF_LABEL[sel.diff] ?? sel.diff}`;
 }
 
@@ -279,11 +75,17 @@ function buildHudPortraits() {
   };
 }
 
+// Spawn the active fighters for the current match indices (fresh HP/rage;
+// the surviving winner of a tag keeps nothing — both benches enter fresh).
+// Tag-ins use spawnReserve() instead (winner keeps current HP).
 function spawnActives() {
   p1 = new Fighter(activeKind(match.p1), arenaCenter() - 120, GROUND_Y);
   p2 = new Fighter(activeKind(match.p2), arenaCenter() + 120, GROUND_Y);
 }
 
+// Tag-in: only the `side` ("p1"|"p2") with a fresh reserve respawns; the
+// survivor keeps HP, rage, and position (relay snowball for clean wins).
+// Stored per-member HP/rage is restored (manual tag-outs persist damage).
 function spawnFighterFor(side, x) {
   const f = side === "p1" ? p1 : p2;
   const st = side === "p1" ? match.p1 : match.p2;
@@ -292,7 +94,6 @@ function spawnFighterFor(side, x) {
   const nf = new Fighter(kind, x ?? (side === "p1" ? arenaCenter() - 120 : arenaCenter() + 120), GROUND_Y);
   nf.hp = Math.min(nf.maxHp, slot.hp);
   nf.rage = slot.rage;
-  nf.vuln = !!slot.vuln;
   if (side === "p1") p1 = nf; else p2 = nf;
   return nf;
 }
@@ -309,8 +110,11 @@ function spawnReserve(side) {
   refreshHudPortraits();
 }
 
+// Manual tag-out (X/C): swap the active fighter for a bench member mid-battle.
+// Grounded neutral/guard only — no escaping stun, swings, grabs, or supers.
+// Costs half a rage bar + 1s cooldown per side; per-member HP/rage persists.
 const TAGABLE = new Set(["IDLE", "WALK", "CROUCH", "SNEAK", "BLOCK", "LAND"]);
-const TAG_COST = RAGE.PER_LEVEL / 2;
+const TAG_COST = RAGE.PER_LEVEL / 2; // half a bar: rotation is earned, not free
 function tryManualTag(side) {
   const f = side === "p1" ? p1 : p2;
   const req = f.tagRequest;
@@ -318,12 +122,12 @@ function tryManualTag(side) {
   if (!req || match.over || koSeen) return;
   if (match.tagCD[side] > 0) return;
   if (f.hp <= 0 || f.freezeT > 0 || !f.grounded || !TAGABLE.has(f.state)) return;
-  if (f.rage < TAG_COST) return;
+  if (f.rage < TAG_COST) return; // skint: hold the lead and build meter
   const st = side === "p1" ? match.p1 : match.p2;
   const tgt = tagTarget(st, req);
   if (tgt < 0) return;
-  const paid = Math.max(0, f.rage - TAG_COST);
-  saveSlot(st, f.hp, paid, f.vuln);
+  const paid = Math.max(0, f.rage - TAG_COST); // half-bar fee, kept in the slot
+  saveSlot(st, f.hp, paid); // fee leaves with the outgoing member
   Sparks.shadowburst(f.x, f.y);
   AudioFX.whoosh();
   const x = f.x;
@@ -335,6 +139,7 @@ function tryManualTag(side) {
   match.tagCD[side] = 1.0;
 }
 
+// Full match reset (R rematch / new stage): score, teams, clock, FX.
 function resetMatch() {
   match = createMatch(sel.p1, sel.p2);
   hudPort = buildHudPortraits();
@@ -346,17 +151,15 @@ function resetMatch() {
   Sparks.list.length = 0;
   Clones.list.length = 0;
   Beams.list.length = 0;
-  WebLines.list.length = 0;
-  Bolts.list.length = 0;
-  FlyingHammer.hide();
   Missiles.list.length = 0;
-  Missiles.clear();
+  Missiles.clear(); // never inherit a gripped dart from last round
   koSeen = false;
   koT = 0;
   pending = null;
   announce = { text: "ROUND 1 — FIGHT!", t: 1.6 };
 }
 
+// Next round after a decided (non-match-ending) round: fresh teams + clock.
 function nextRound() {
   hudPort = buildHudPortraits();
   spawnActives();
@@ -366,9 +169,6 @@ function nextRound() {
   Sparks.list.length = 0;
   Clones.list.length = 0;
   Beams.list.length = 0;
-  WebLines.list.length = 0;
-  Bolts.list.length = 0;
-  FlyingHammer.hide();
   Missiles.list.length = 0;
   Missiles.clear();
   koSeen = false;
@@ -377,6 +177,8 @@ function nextRound() {
   announce = { text: `ROUND ${match.round} — FIGHT!`, t: 1.6 };
 }
 
+// Fresh fighters: positions + full health + cleared clocks/FX. Every effect
+// list is wiped so a rematch never inherits last round's debris.
 function resetRound() {
   resetMatch();
 }
@@ -392,74 +194,56 @@ const screens = initScreens(sel, {
   },
 });
 
+// Per-fighter control mapping. P2 mirrors P1 on arrows + right-hand keys so
+// combat can be tested with two humans (AI arrives M12). M10 specials: P1 on
+// Space/F/O, P2 mirror on ;/'/P (temporary until AI takes P2).
 const CONTROLS = {
   p1: { left: "a", right: "d", jump: "w", crouch: "s", light: "j", heavy: "k", grab: "l", edge: "e", tag: "x", tagAlt: "c", s1: " ", s2: "f", s3: "o" },
   p2: { left: "arrowleft", right: "arrowright", jump: "arrowup", crouch: "arrowdown", light: ",", heavy: ".", grab: "/", edge: "shift", tag: "n", tagAlt: "b", s1: ";", s2: "'", s3: "p" },
 };
-
+// Special ids per slot (M11 fills homelander's kit; trySpecial refuses unknown).
 const SPECIALS = { s1: "jaguar", s2: "phantom", s3: "ragemode" };
 
-let codeBuf = "";
-
-function applyUnlock() {
-  unlockUroboros();
-  screens.paintDraft();
-  document.getElementById("howto-uroboros")?.classList.remove("hidden");
-  const flash = document.getElementById("unlock-flash");
-  if (flash) {
-    flash.textContent = "UROBOROS UNLOCKED — CHECK THE ROSTER";
-    flash.classList.remove("hidden");
-    setTimeout(() => flash.classList.add("hidden"), 2600);
-  }
-  AudioFX.levelUp();
-}
-
-function pollMenuCode() {
-  for (const k of keys) {
-    if (prevKeys.has(k) || k.length !== 1 || k < "a" || k > "z") continue;
-    const r = pushCode(codeBuf, k);
-    codeBuf = r.buf;
-    if (r.hit && !isUroborosUnlocked()) applyUnlock();
-  }
-  if (isUroborosUnlocked()) {
-    document.getElementById("howto-uroboros")?.classList.remove("hidden");
-  }
-}
-
+// Debug overlay: hurtboxes (green) + live hitboxes (yellow). Toggle with H.
 let showBoxes = false;
 
-function drive(fighter, map, tap, foe, keySet = keys, prevSet = prevKeys) {
-  fighter.moving = (keySet.has(map.left) ? -1 : 0) + (keySet.has(map.right) ? 1 : 0);
-  fighter.crouchHeld = keySet.has(map.crouch);
+// Drive one fighter from its key mapping. Holds set continuous intents;
+// fresh presses (in `prevKeys`) queue one-shot actions. A second tap of the
+// same direction within TAP_WINDOW becomes a dash (AA / DD). Blocking is
+// directional: holding AWAY raises a walkable guard at any range (MVC3
+// style — BLOCK itself retreats while held). With S also held the guard
+// drops low — S alone only ever crouches, never blocks.
+function drive(fighter, map, tap, foe) {
+  fighter.moving = (keys.has(map.left) ? -1 : 0) + (keys.has(map.right) ? 1 : 0);
+  fighter.crouchHeld = keys.has(map.crouch);
   const awayKey = foe.x >= fighter.x ? map.left : map.right;
-  fighter.blockHeld = keySet.has(awayKey);
-  if (!prevSet.has(map.jump) && keySet.has(map.jump)) fighter.queueJump();
-  const lEdge = !prevSet.has(map.light) && keySet.has(map.light);
-  const hEdge = !prevSet.has(map.heavy) && keySet.has(map.heavy);
-  const eEdge = !prevSet.has(map.edge) && keySet.has(map.edge);
-
+  fighter.blockHeld = keys.has(awayKey);
+  if (!prevKeys.has(map.jump) && keys.has(map.jump)) fighter.queueJump();
+  const lEdge = !prevKeys.has(map.light) && keys.has(map.light);
+  const hEdge = !prevKeys.has(map.heavy) && keys.has(map.heavy);
+  const eEdge = !prevKeys.has(map.edge) && keys.has(map.edge);
+  // Samurai Edge (E / Shift): dedicated key, single press. Wesker-only
+  // burst firearm — instant from neutral, guard, dash, stun, or mid-swing,
+  // with i-frames (fighter decides the gates). Falls back to heavy so the
+  // key never feels dead — Homelander has no gun, so his E routes to the
+  // grab via pressHeavy.
   if (eEdge) {
-    if (!fighter.trySamuraiEdge() && !fighter.tryRepulsor() && !fighter.tryHammer() && !fighter.tryPhoton() && !fighter.tryWebZip()) fighter.pressHeavy();
+    if (!fighter.trySamuraiEdge()) fighter.pressHeavy();
   }
   if (lEdge) fighter.pressLight();
-  if (hEdge) {
-    if (fighter.kind === "doom") {
-      const toward = foe.x >= fighter.x ? 1 : -1;
-      if (fighter.moving === -toward && fighter.trySnap(foe)) { /* snapped */ }
-      else fighter.pressHeavy();
-    } else fighter.pressHeavy();
-  }
-  if (!prevSet.has(map.grab) && keySet.has(map.grab)) fighter.pressGrab();
-
-  if (!prevSet.has(map.tag) && keySet.has(map.tag)) fighter.queueTag("next");
-  if (!prevSet.has(map.tagAlt) && keySet.has(map.tagAlt)) fighter.queueTag("alt");
+  if (hEdge) fighter.pressHeavy();
+  if (!prevKeys.has(map.grab) && keys.has(map.grab)) fighter.pressGrab();
+  // Manual tag-out (teams): X swaps to the next alive member, C jumps to the
+  // other bench fighter (trio). Gated + executed by the fight loop.
+  if (!prevKeys.has(map.tag) && keys.has(map.tag)) fighter.queueTag("next");
+  if (!prevKeys.has(map.tagAlt) && keys.has(map.tagAlt)) fighter.queueTag("alt");
   for (const slot of ["s1", "s2", "s3"]) {
-    if (!prevSet.has(map[slot]) && keySet.has(map[slot])) fighter.trySpecial(SPECIALS[slot], foe);
+    if (!prevKeys.has(map[slot]) && keys.has(map[slot])) fighter.trySpecial(SPECIALS[slot], foe);
   }
   for (const [key, dir] of [[map.left, -1], [map.right, 1]]) {
-    if (!prevSet.has(key) && keySet.has(key)) {
+    if (!prevKeys.has(key) && keys.has(key)) {
       if (tap.key === key && elapsed - tap.t < MOVE.TAP_WINDOW) {
-        fighter.queueDash(dir);
+        fighter.queueDash(dir); // screen dir; fighter resolves fwd vs back
         tap.key = null;
       } else {
         tap.key = key;
@@ -471,32 +255,27 @@ function drive(fighter, map, tap, foe, keySet = keys, prevSet = prevKeys) {
 
 function pollMoveInput(dt) {
   drive(p1, CONTROLS.p1, tap1, p2);
-
-  if (net.mode === "host" && net.guestOn) {
-    drive(p2, CONTROLS.p2, tap2, p1, net.keys, net.prev);
-  } else if (ai) ai.update(dt, p2, p1, { tagCD: match.tagCD.p2, side: match.p2, clock: roundTime, ahead: match.p2.wins > match.p1.wins });
-  else drive(p2, CONTROLS.p2, tap2, p1);
+  // CPU pilot gets tag context (cooldown + own bench) for low-HP rotations.
+  if (ai) ai.update(dt, p2, p1, { tagCD: match.tagCD.p2, side: match.p2 });
+  else drive(p2, CONTROLS.p2, tap2, p1); // ...or a second human does
   if (!prevKeys.has("m") && keys.has("m")) {
     document.getElementById("btn-swap-map").click();
   }
   if (!prevKeys.has("escape") && keys.has("escape")) {
-    if (net.mode === "host") {
-      try {
-        net.api?.send({ t: "bye" });
-      } catch { /* ignore */ }
-      teardownNet();
-    }
     state = STATE.MENU;
     screens.show("screen-menu");
   }
   if (!prevKeys.has("h") && keys.has("h")) showBoxes = !showBoxes;
-  if (!prevKeys.has("r") && keys.has("r")) resetRound();
+  if (!prevKeys.has("r") && keys.has("r")) resetRound(); // test hook (rematch is M15)
+  // M9 test hooks: grant a rage level (specials arrive M10/M11).
+  if (!prevKeys.has("t") && keys.has("t")) p1.addRage(RAGE.PER_LEVEL);
+  if (!prevKeys.has("u") && keys.has("u")) p2.addRage(RAGE.PER_LEVEL);
   prevKeys = new Set(keys);
-  if (net.mode === "host") net.prev = new Set(net.keys);
 }
 
 function drawHUD() {
-
+  // M14 HUD: head portraits + real names beside the M3 health bars; rage
+  // meters (M9) sit under each bar; timer + rounds arrive in M15.
   const drawPort = (img, x) => {
     ctx.fillStyle = "rgba(0,0,0,0.55)";
     ctx.fillRect(x - 2, 2, 44, 44);
@@ -520,7 +299,8 @@ function drawHUD() {
   };
   drawBar(70, `P1 ${CHARACTERS[p1.kind].name} ${Math.ceil(p1.hp)}/${p1.maxHp}`, "#3ecf5a", p1.hp / p1.maxHp);
   drawBar(VIEW_W - 370, `P2 ${CHARACTERS[p2.kind].name} ${Math.ceil(p2.hp)}/${p2.maxHp}`, "#ff4b4b", p2.hp / p2.maxHp);
-
+  // M9 rage meters: 3 segments under each bar, filling left to right. A fresh
+  // level flashes white (fighter.rageFlash) — the "now available" signal.
   const drawRage = (x, f) => {
     const segW = 96, segH = 12, gap = 4, y = 60;
     const cols = ["#ffb13e", "#ff7a3e", "#ff3b3b"];
@@ -543,18 +323,16 @@ function drawHUD() {
   };
   drawRage(70, p1);
   drawRage(VIEW_W - 370, p2);
-
+  // M15 match HUD: countdown clock, round number + pips, benched reserves.
   const timeTxt = `${Math.ceil(roundTime)}`;
   ctx.font = "bold 26px 'Courier New', monospace";
   ctx.textAlign = "center";
   ctx.fillStyle = roundTime <= 10 ? "#ff3b3b" : "#ffd23e";
   ctx.fillText(timeTxt, VIEW_W / 2, 50);
-
   ctx.font = "bold 12px 'Courier New', monospace";
   ctx.fillStyle = "#fff";
   const pip = (w) => "●".repeat(w) + "○".repeat(Math.max(0, match.target - w));
   ctx.fillText(`R${match.round}  P1 [${pip(match.p1.wins)}]  P2 [${pip(match.p2.wins)}]`, VIEW_W / 2, 68);
-
   ctx.textAlign = "left";
   const drawBench = (imgs, x) => {
     imgs.forEach((img, i) => {
@@ -569,20 +347,18 @@ function drawHUD() {
     const bw = hudPort.p2bench.length * 24;
     drawBench(hudPort.p2bench, VIEW_W - 70 - bw);
   }
-
+  // Tag-in / round / time banner.
   if (announce) {
     ctx.textAlign = "center";
     ctx.font = "bold 28px 'Courier New', monospace";
     ctx.lineWidth = 5;
     ctx.strokeStyle = "#101018";
     ctx.strokeText(announce.text, VIEW_W / 2, 140);
-
     ctx.fillStyle = "#ffd23e";
     ctx.fillText(announce.text, VIEW_W / 2, 140);
-
     ctx.textAlign = "left";
   }
-
+  // Debug readout: live state per fighter (proves the machine works).
   ctx.font = "12px 'Courier New', monospace";
   ctx.fillStyle = "#9fd4ff";
   const tag = (f, x) => {
@@ -593,17 +369,16 @@ function drawHUD() {
   tag(p1, 20);
   const label2 = `${p2.kind.toUpperCase()} ${p2.state}${p2.state === FState.SPECIAL && p2.specialId ? `:${p2.specialId}` : ""} ${p2.grounded ? "GRND" : "AIR "}${p2.isLow ? " LOW" : ""}`;
   ctx.fillText(label2, VIEW_W - 20 - ctx.measureText(label2).width, 88);
-
+  // M14 KO stamp (during the slow-mo) + M15 match card (decided match).
+  // Round transitions execute silently after the stamp — the banner names
+  // the incoming fighter / next round.
   if (koSeen) {
     const cx = VIEW_W / 2;
-
     ctx.fillStyle = "rgba(8,4,12,0.45)";
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
     ctx.save();
     ctx.translate(cx, VIEW_H / 2 - 70);
-
     const pop = Math.min(1, koT / 0.25);
-
     ctx.scale(0.55 + 0.45 * pop, 0.55 + 0.45 * pop);
     ctx.textAlign = "center";
     ctx.font = "bold 90px 'Courier New', monospace";
@@ -617,7 +392,6 @@ function drawHUD() {
   }
   if (match.over) {
     const cx = VIEW_W / 2;
-
     ctx.fillStyle = "rgba(8,4,12,0.55)";
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
     ctx.textAlign = "center";
@@ -626,29 +400,25 @@ function drawHUD() {
     ctx.fillStyle = meta.accent;
     ctx.font = "bold 34px 'Courier New', monospace";
     ctx.fillText(`${match.winner === "p1" ? "P1" : "P2"} ${meta.name} TAKES THE MATCH`, cx, VIEW_H / 2 - 30);
-
     ctx.fillStyle = "#fff";
     ctx.font = "bold 22px 'Courier New', monospace";
     ctx.fillText(`${match.p1.wins} — ${match.p2.wins}`, cx, VIEW_H / 2 + 8);
-
     const img = hudPort?.[match.winner];
     if (img) {
       const S = 96;
       ctx.fillStyle = "rgba(0,0,0,0.6)";
       ctx.fillRect(cx - S / 2 - 4, VIEW_H / 2 + 24, S + 8, S + 8);
-
       ctx.imageSmoothingEnabled = false;
       ctx.drawImage(img, cx - S / 2, VIEW_H / 2 + 28, S, S);
-
     }
     ctx.fillStyle = "#fff";
     ctx.font = "16px 'Courier New', monospace";
     ctx.fillText("press R to rematch  •  ESC for menu", cx, VIEW_H / 2 + 150);
-
     ctx.textAlign = "left";
   }
 }
 
+// Hitbox/hurtbox debug overlay (toggled with H).
 function drawBoxes() {
   const rect = (r, color) => {
     ctx.strokeStyle = color;
@@ -664,8 +434,15 @@ function drawBoxes() {
 }
 
 let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  elapsed += dt;
 
-function hostTick(dt) {
+  if (state === STATE.FIGHT) {
+    // KO watch: fires once per finishing blow (either path — clean or chip).
+    // Relay: the loser's bench tags in (pending tag); an eliminated team
+    // ends the round (pending round); a double KO replays it (pending draw).
     if (!match.over && !koSeen && roundTime > 0 && (p1.hp <= 0 || p2.hp <= 0)) {
       koSeen = true;
       koT = 0;
@@ -687,7 +464,7 @@ function hostTick(dt) {
     if (koSeen) {
       koT += dt;
       if (koT >= 1.4 && pending) {
-
+        // Slow-mo settled: execute the queued transition.
         const p = pending;
         pending = null;
         koSeen = false;
@@ -712,14 +489,14 @@ function hostTick(dt) {
         }
       }
     } else if (!match.over) {
-
+      // Countdown runs only while bodies are live (frozen in KO slow-mo).
       roundTime -= dt;
       if (announce) {
         announce.t -= dt;
         if (announce.t <= 0) announce = null;
       }
       if (roundTime <= 0) {
-
+        // TIME: active-HP fractions decide, fuller bench breaks ties.
         roundTime = 0;
         const w = timeoutWinner(
           p1.hp / p1.maxHp, p2.hp / p2.maxHp,
@@ -740,36 +517,37 @@ function hostTick(dt) {
         }
       }
     }
-
+    // Slow-mo: ~1.4s of drift after the finishing blow (sim scales, UI doesn't).
     const simDt = koSeen && koT < 1.4 ? dt * 0.35 : dt;
     pollMoveInput(simDt);
     if (!match.over && !koSeen) {
-
+      // Tag cooldowns tick while bodies are live; requests (human X/C keys
+      // via drive, CPU via ai) resolve here — one consumer for both pilots.
       match.tagCD.p1 = Math.max(0, match.tagCD.p1 - simDt);
       match.tagCD.p2 = Math.max(0, match.tagCD.p2 - simDt);
       tryManualTag("p1");
       tryManualTag("p2");
     }
     if (match.over) {
-
+      // Match decided: frozen tableau behind the winner card (R still rematches).
     } else if (Hitstop.t > 0) {
-      Hitstop.t -= dt;
+      Hitstop.t -= dt; // impact freeze: render continues, bodies don't move
     } else {
       p1.update(simDt, p2);
       p2.update(simDt, p1);
-
+      // No body separation mid-clinch or mid-super: scripted positions
+      // (carry grip, teleports, driving tackles) own the spacing on purpose.
       const clinch =
         p1.state === FState.GRAB || p2.state === FState.GRAB ||
         p1.state === FState.THROWN || p2.state === FState.THROWN ||
         p1.state === FState.SPECIAL || p2.state === FState.SPECIAL;
-      if (!clinch) separate(p1, p2);
+      if (!clinch) separate(p1, p2); // soft pushbox otherwise
       Sparks.update(simDt);
       Clones.update(simDt);
       Beams.update(simDt);
-      WebLines.update(simDt);
-      Bolts.update(simDt);
       Missiles.update(simDt);
-
+      // Consume combat reports (M14): guard flash on blocks, red star +
+      // damage-scaled camera kick on clean hits.
       for (const f of [p1, p2]) {
         const c = f.lastContact;
         f.lastContact = null;
@@ -783,7 +561,7 @@ function hostTick(dt) {
           cam.kick(Math.min(0.32, 0.07 + (c.weight || 5) * 0.012));
         }
       }
-
+      // Drain camera trauma requested by supers (see f.camKick).
       for (const f of [p1, p2]) {
         if (f.camKick) {
           cam.kick(f.camKick);
@@ -791,141 +569,44 @@ function hostTick(dt) {
         }
       }
     }
-    drawFight(simDt);
-    if (net.mode === "host" && net.api) {
-      try {
-        net.api.send(buildSnap());
-      } catch (err) {
-        netStatus("net error: " + (err && err.message ? err.message : err));
-      }
-    }
-}
-
-function guestTick(dt) {
-  try {
-    if (net.api) {
-      const keyStr = [...keys].sort().join(",");
-      if (keyStr !== net.lastKeys) {
-        net.lastKeys = keyStr;
-        net.api.send({ t: "in", keys: [...keys] });
-      }
-    }
-    if (net.snap) {
-      applySnap(net.snap);
-      net.snap = null;
-    }
-  } catch (err) {
-    netStatus("net error: " + (err && err.message ? err.message : err));
-    return;
-  }
-  if (state !== STATE.FIGHT) return;
-  if (!prevKeys.has("escape") && keys.has("escape")) {
-    netDrop("left the fight");
-    return;
-  }
-  if (!prevKeys.has("h") && keys.has("h")) showBoxes = !showBoxes;
-  if (++net.linkTick % 30 === 0) {
-    const now = performance.now();
-    net.snapTimes = net.snapTimes.filter((t) => now - t < 1000);
-    document.getElementById("fight-label").textContent =
-      `${map.name} — GUEST (P2 you) — LINK ${net.snapTimes.length}/s`;
-  }
-  const simDt = koSeen && koT < 1.4 ? dt * 0.35 : dt;
-  drawFight(simDt);
-}
-
-function drawFight(simDt) {
     cam.update(simDt, p1, p2);
     particles.update(simDt);
-
+    // World draws ride inside the trauma offset (HUD stays locked).
     ctx.save();
     ctx.translate(cam.shakeX(elapsed), cam.shakeY(elapsed));
-
+    // Draw order: map (all parallax layers) -> shadows -> fighters -> particles -> light/HUD
     map.draw(ctx, cam.x, elapsed);
     drawShadow(ctx, p1.x, GROUND_Y, cam.x, Math.round(p1.w * 0.78));
     drawShadow(ctx, p2.x, GROUND_Y, cam.x, Math.round(p2.w * 0.78));
-
+    // Draw far fighter first so overlap looks correct.
     const [back, front] = p1.y <= p2.y ? [p1, p2] : [p2, p1];
-    Clones.draw(ctx, cam.x);
+    Clones.draw(ctx, cam.x); // afterimages behind the live fighters
     back.draw(ctx, cam.x);
     front.draw(ctx, cam.x);
     if (showBoxes) drawBoxes();
     Sparks.draw(ctx, cam.x);
-    Beams.draw(ctx, cam.x);
-    WebLines.draw(ctx, cam.x);
-    Bolts.draw(ctx, cam.x);
-    FlyingHammer.draw(ctx, cam.x);
-    Missiles.draw(ctx, cam.x);
+    Beams.draw(ctx, cam.x); // heat rays over the fighters
+    Missiles.draw(ctx, cam.x); // falling ordnance over everything
     particles.draw(ctx, cam.x, 0.7);
     ctx.restore();
     drawHUD();
-}
-
-function loop(now) {
-  const dt = Math.min(0.05, (now - last) / 1000);
-  last = now;
-  elapsed += dt;
-  if (state === STATE.FIGHT) {
-    if (net.mode === "guest") guestTick(dt);
-    else hostTick(dt);
   } else {
-
-    pollMenuCode();
+    // Behind menus: slowly pan the current map as an animated backdrop.
     cam.x = (Math.sin(elapsed * 0.05) * 0.5 + 0.5) * Math.max(0, arena.width - VIEW_W);
     map.draw(ctx, cam.x, elapsed);
   }
-  prevKeys = new Set(keys);
   requestAnimationFrame(loop);
 }
 
 initInput();
-
-window.addEventListener("error", (e) => {
-  if (net.mode === "off") return;
-  const msg = (e && e.message) || "unknown error";
-  netStatus("net error: " + msg);
-});
-
-let netPendingRole = null;
-document.getElementById("btn-host").onclick = () => {
-  AudioFX.blip(660);
-  netPendingRole = "host";
-  const row = document.getElementById("net-row");
-  row?.classList.remove("hidden");
-  const ip = document.getElementById("net-ip");
-  if (ip && !ip.value) ip.value = "localhost";
-  const port = document.getElementById("net-port");
-  if (port && !port.value) port.value = "8125";
-};
-document.getElementById("btn-join").onclick = () => {
-  AudioFX.blip(660);
-  netPendingRole = "guest";
-  const row = document.getElementById("net-row");
-  row?.classList.remove("hidden");
-  const ip = document.getElementById("net-ip");
-  if (ip && !ip.value) ip.value = lastNetIP();
-  const port = document.getElementById("net-port");
-  if (port && !port.value) port.value = "8125";
-};
-document.getElementById("btn-connect").onclick = () => {
-  AudioFX.blip(660);
-  const ip = document.getElementById("net-ip")?.value || "localhost";
-  netConnect(netPendingRole || "guest", ip);
-};
-document.getElementById("btn-netback").onclick = () => {
-  AudioFX.blip(400);
-  document.getElementById("net-row")?.classList.add("hidden");
-  teardownNet();
-  state = STATE.MENU;
-  screens.show("screen-menu");
-};
-
+// P1 attacks on mouse (LMB light / RMB heavy). Keyboard J/K work too.
+// Samurai Edge is on the E key (P1) / Shift (P2) — single press, handled in
+// drive(), so the mouse path stays a plain single heavy with no timing code.
 canvas.addEventListener("mousedown", (e) => {
-  if (state !== STATE.FIGHT || net.mode === "guest") return;
+  if (state !== STATE.FIGHT) return;
   if (e.button === 0) { p1.pressLight(); return; }
   if (e.button !== 2) return;
   p1.pressHeavy();
 });
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 requestAnimationFrame(loop);
-

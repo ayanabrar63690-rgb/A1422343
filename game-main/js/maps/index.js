@@ -1,3 +1,6 @@
+// Map registry: single lookup for id -> map. M13: each map carries its own
+// collision width, select-screen hint, and ambient particle config on top
+// of the painter; the floor plane itself stays the shared GROUND_Y.
 import { forest } from "./forest.js";
 import { lab } from "./lab.js";
 import { city } from "./city.js";
@@ -12,4 +15,3 @@ export function pickMap(id) {
   }
   return MAPS[id] ?? MAPS.forest;
 }
-

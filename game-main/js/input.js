@@ -1,3 +1,6 @@
+// Keyboard + menu input. One shared `keys` Set, polled by the game loop.
+// JS concept vs Python: browser input is event-driven (callbacks), not
+// blocking `input()`. We record key state on keydown/keyup and read it later.
 export const keys = new Set();
 
 const alias = (k) => k.toLowerCase();
@@ -14,4 +17,3 @@ export function initInput() {
 export function pressed(...names) {
   return names.some((n) => keys.has(n));
 }
-

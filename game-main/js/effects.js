@@ -1,3 +1,6 @@
+// Ambient particles per map (leaves / lab sparks / rising city embers) +
+// soft shadows. One tiny system reused by all maps instead of copy-pasted
+// logic. M13: maps own {kind, count}; area covers the live arena width.
 import { SPRITE_SCALE } from "./config.js";
 import { FEET_PAD } from "./render/sprites.js";
 export class Particles {
@@ -11,12 +14,13 @@ export class Particles {
     const [w, h] = [this.area.w, this.area.h];
     return {
       x: Math.random() * w,
-
+      // Embers are reborn near the ground (fires below) and rise; the
+      // other kinds rain down from the top of the screen.
       y: anywhere ? Math.random() * h : this.kind === "embers" ? h - Math.random() * 80 : -10,
       vx: this.kind === "leaves" ? -30 - Math.random() * 40 : (Math.random() - 0.5) * 20,
       vy: this.kind === "leaves" ? 15 + Math.random() * 35
         : this.kind === "lab" ? 10 + Math.random() * 30
-        : -(15 + Math.random() * 35),
+        : -(15 + Math.random() * 35), // embers RISE (city fires)
       s: 1 + Math.floor(Math.random() * 3),
       ph: Math.random() * 10,
     };
@@ -42,20 +46,26 @@ export class Particles {
   }
 }
 
+// Soft ellipse shadow under each fighter (grounds them on the plane).
 export function drawShadow(ctx, xWorld, yGround, camX, w = 84, alpha = 0.35) {
   ctx.save();
   ctx.globalAlpha = alpha;
   ctx.fillStyle = "#000";
   ctx.beginPath();
   ctx.ellipse(Math.round(xWorld - camX), Math.round(yGround + 6), w / 2, 10, 0, 0, Math.PI * 2);
-
   ctx.fill();
   ctx.restore();
 }
 
+// Phantom afterimages ("clones"): fading silhouette snapshots left behind
+// by teleports and burst dashes. Logic spawns them with a canvas; main.js
+// draws them behind the live fighters and ticks them with everything else.
+// JS concept vs Python: `img` here is just an object reference (like any
+// Python object) — no copy is made, the snapshot reads the shared canvas.
 export const Clones = {
   list: [],
-
+  // style "ghost" (translucent copy) or "shadow" (solid black silhouette —
+  // the speed-afterimage of something moving too fast to see).
   spawn(img, xFeet, yFeet, facing, life = 0.4, style = "ghost") {
     let dark = null;
     if (style === "shadow") {
@@ -83,7 +93,7 @@ export const Clones = {
       const dx = Math.round(c.x - camX - w / 2);
       const dy = Math.round(c.y - h + FEET_PAD * SPRITE_SCALE);
       ctx.save();
-
+      // Shadows read denser and die faster than ghosts.
       ctx.globalAlpha = c.style === "shadow" ? 0.8 * (1 - c.t / c.life) : 0.45 * (1 - c.t / c.life);
       if (c.facing === 1) {
         ctx.drawImage(pic, dx, dy, w, h);
@@ -96,13 +106,16 @@ export const Clones = {
     }
   },
 };
-
+// Impact sparks. M4 spawns the blue guard flash on blocks (clear feedback
+// that no damage was taken); red hit sparks + bigger effects arrive in M14.
+// JS concept vs Python: methods here use `this` (like self) — but the
+// receiver is implicit. `Sparks.block(...)` sets this=Sparks automatically.
 export const Sparks = {
   list: [],
   block(x, y) {
     this.list.push({ x, y, t: 0, life: 0.18, kind: "flash" });
     for (let i = 0; i < 7; i++) {
-      const a = -Math.PI / 2 + (Math.random() - 0.5) * 2.2;
+      const a = -Math.PI / 2 + (Math.random() - 0.5) * 2.2; // upward fan
       const sp = 120 + Math.random() * 220;
       this.list.push({
         x, y,
@@ -111,7 +124,8 @@ export const Sparks = {
       });
     }
   },
-
+  // M14 clean-hit impact: white-hot star + red-hot shards sprayed in the
+  // knock direction (the consumer in main.js passes attacker.attackDir).
   hit(x, y, dir = 1) {
     this.list.push({ x, y, t: 0, life: 0.16, kind: "hitflash" });
     for (let i = 0; i < 8; i++) {
@@ -125,7 +139,7 @@ export const Sparks = {
       });
     }
   },
-
+  // M14.5 Samurai Edge muzzle: hot star + forward spark spray (dir = shot).
   muzzle(x, y, dir) {
     this.list.push({ x, y, t: 0, life: 0.09, kind: "hitflash" });
     for (let i = 0; i < 5; i++) {
@@ -137,7 +151,7 @@ export const Sparks = {
       });
     }
   },
-
+  // M14 movement dust: ground kick-up for dash takeoff / land / jump.
   dust(x, y) {
     for (let i = 0; i < 5; i++) {
       this.list.push({
@@ -147,7 +161,7 @@ export const Sparks = {
       });
     }
   },
-
+  // M14 KO finale: crater ring + doubled gore + flash + twin shard fans.
   ko(x, y) {
     this.list.push({ x, y, t: 0, life: 0.25, kind: "hitflash" });
     this.ring(x, y, 170);
@@ -171,24 +185,24 @@ export const Sparks = {
       if (s.kind === "shard" || s.kind === "hshard") {
         s.x += s.vx * dt;
         s.y += s.vy * dt;
-        s.vy += 900 * dt;
+        s.vy += 900 * dt; // shards arc down like struck sparks
       } else if (s.kind === "dust") {
         s.x += s.vx * dt;
         s.y += s.vy * dt;
-        s.vy += 320 * dt;
+        s.vy += 320 * dt;  // light kick-up, settles fast
         s.vx *= Math.max(0, 1 - 3 * dt);
-      } else if (s.kind === "mote" || s.kind === "vmote" || s.kind === "wisp" || s.kind === "smote" || s.kind === "webstrand") {
+      } else if (s.kind === "mote" || s.kind === "vmote" || s.kind === "wisp" || s.kind === "smote") {
         s.x += s.vx * dt;
-        s.y += s.vy * dt;
+        s.y += s.vy * dt; // embers rise, poof wisps drift
       } else if (s.kind === "blood") {
         s.x += s.vx * dt;
         s.y += s.vy * dt;
-        s.vy += 1400 * dt;
+        s.vy += 1400 * dt; // gore falls fast
       }
     }
     this.list = this.list.filter((s) => s.t < s.life);
   },
-
+  // M10 teleport poof: violet-white burst + slow drifting wisps.
   puff(x, y) {
     this.list.push({ x, y, t: 0, life: 0.22, kind: "poof" });
     for (let i = 0; i < 8; i++) {
@@ -201,7 +215,7 @@ export const Sparks = {
       });
     }
   },
-
+  // M10 rage ember: one rising red spark (spawn per-frame for an aura).
   ember(x, y) {
     this.list.push({
       x, y,
@@ -209,11 +223,11 @@ export const Sparks = {
       t: 0, life: 0.3 + Math.random() * 0.15, kind: "mote",
     });
   },
-
+  // M11 sonic ring: expanding square shockwave from a scream.
   ring(x, y, maxR = 150) {
     this.list.push({ x, y, maxR, t: 0, life: 0.32, kind: "ring" });
   },
-
+  // M11 laser burn: red droplets flung from the victim (pixel gore, brief).
   blood(x, y) {
     for (let i = 0; i < 4; i++) {
       this.list.push({
@@ -223,31 +237,7 @@ export const Sparks = {
       });
     }
   },
-
-  gore(x, y) {
-    // massacre burst: double blood + chunks that stick as a ground pool
-    this.blood(x, y);
-    this.blood(x, y);
-    for (let i = 0; i < 5; i++) {
-      this.list.push({
-        x: x + (Math.random() - 0.5) * 16, y: y - Math.random() * 20,
-        vx: (Math.random() - 0.5) * 340, vy: -60 - Math.random() * 220,
-        t: 0, life: 0.5 + Math.random() * 0.2, kind: "blood",
-      });
-    }
-    this.pool(x, y + 90);
-  },
-
-  pool(x, y) {
-    this.list.push({ x, y, t: 0, life: 6.0, kind: "pool", seed: Math.random() * 10 });
-    // cap pools so long gore sessions don't grow the list forever
-    const pools = this.list.filter((s) => s.kind === "pool");
-    if (pools.length > 24) {
-      const drop = pools[0];
-      this.list.splice(this.list.indexOf(drop), 1);
-    }
-  },
-
+  // Phantom violet: slow rising phantom-flame mote (jaguar trail + strikes).
   violet(x, y) {
     this.list.push({
       x, y,
@@ -255,20 +245,8 @@ export const Sparks = {
       t: 0, life: 0.35 + Math.random() * 0.15, kind: "vmote",
     });
   },
-
-  web(x, y) {
-    this.list.push({ x, y, t: 0, life: 0.20, kind: "webflash" });
-    for (let i = 0; i < 8; i++) {
-      const a = Math.random() * Math.PI * 2;
-      const sp = 60 + Math.random() * 180;
-      this.list.push({
-        x, y,
-        vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 40,
-        t: 0, life: 0.30 + Math.random() * 0.15, kind: "webstrand",
-      });
-    }
-  },
-
+  // Shadow Step aura: black-purple dust burst for vanish + reform (Wesker).
+  // Dense dark core motes + violet edge sparks + low ground dust.
   shadowburst(x, y) {
     for (let i = 0; i < 10; i++) {
       const a = Math.random() * Math.PI * 2;
@@ -282,7 +260,7 @@ export const Sparks = {
     for (let i = 0; i < 4; i++) this.violet(x + (Math.random() - 0.5) * 50, y - 30 - Math.random() * 90);
     this.dust(x, y);
   },
-
+  // Wolverine slash arc: 3 parallel white claw trails + hot shards.
   slash(x, y, dir = 1) {
     for (let i = -1; i <= 1; i++) {
       this.list.push({ x, y: y + i * 5, t: 0, life: 0.16, kind: "slash", dir });
@@ -302,7 +280,7 @@ export const Sparks = {
       const x = Math.round(s.x - camX);
       const y = Math.round(s.y);
       if (s.kind === "flash") {
-
+        // Expanding cross flash, white core + cyan halo (M4 guard).
         const r = Math.round(3 + s.t * 70);
         ctx.fillStyle = "#35e0ff";
         ctx.fillRect(x - r - 2, y - 1, r * 2 + 4, 2);
@@ -311,7 +289,7 @@ export const Sparks = {
         ctx.fillRect(x - r, y - 1, r * 2, 2);
         ctx.fillRect(x - 1, y - r, 2, r * 2);
       } else if (s.kind === "hitflash") {
-
+        // M14 clean-hit star: red-hot halo + white heart (bigger than block).
         const r = Math.round(4 + s.t * 95);
         ctx.fillStyle = "#ff4a2a";
         ctx.fillRect(x - r - 2, y - 2, r * 2 + 4, 4);
@@ -320,22 +298,8 @@ export const Sparks = {
         ctx.fillRect(x - r, y - 1, r * 2, 2);
         ctx.fillRect(x - 1, y - r, 2, r * 2);
         ctx.fillRect(x - 3, y - 3, 6, 6);
-      } else if (s.kind === "webflash") {
-        const r = Math.round(4 + s.t * 80);
-        ctx.fillStyle = "#ffffff";
-        ctx.fillRect(x - r - 2, y - 1, r * 2 + 4, 2);
-        ctx.fillRect(x - 1, y - r - 2, 2, r * 2 + 4);
-        ctx.fillStyle = "#bff4ff";
-        ctx.fillRect(x - 3, y - 3, 6, 6);
-      } else if (s.kind === "webstrand") {
-        ctx.globalAlpha = Math.max(0, 1 - s.t / s.life);
-        ctx.fillStyle = "#ffffff";
-        ctx.fillRect(x, y, 3, 1);
-        ctx.fillStyle = "#9fd4ff";
-        ctx.fillRect(x, y + 1, 2, 1);
-        ctx.globalAlpha = 1;
       } else if (s.kind === "slash") {
-
+        // Claw arc: purple-red streaks stretching along the swing direction.
         const k = 1 - s.t / s.life;
         const len = Math.round(26 * k + 8);
         const d = s.dir >= 0 ? 1 : -1;
@@ -346,7 +310,7 @@ export const Sparks = {
         ctx.fillRect(d > 0 ? x - len : x, y + 2, len, 1);
         ctx.globalAlpha = 1;
       } else if (s.kind === "poof") {
-
+        // Teleport burst: violet ring + white heart.
         const r = Math.round(4 + s.t * 90);
         ctx.fillStyle = "#8a6bff";
         ctx.fillRect(x - r, y - 2, r * 2, 4);
@@ -354,7 +318,7 @@ export const Sparks = {
         ctx.fillStyle = "#ffffff";
         ctx.fillRect(x - 3, y - 3, 6, 6);
       } else if (s.kind === "ring") {
-
+        // Sonic shockwave: two expanding square outlines, fading.
         const k = s.t / s.life;
         const r = Math.max(2, Math.round(s.maxR * k));
         ctx.globalAlpha = Math.max(0, 1 - k);
@@ -373,24 +337,9 @@ export const Sparks = {
         ctx.fillStyle = "#c01414";
         ctx.fillRect(x, y, 2, 2);
         ctx.globalAlpha = 1;
-      } else if (s.kind === "pool") {
-        // dried blood pool: dark crust + wet red core, seeps in then fades
-        const k = s.t / s.life;
-        const grow = Math.min(1, s.t / 0.4);
-        const wob = Math.sin((s.seed || 0) * 7);
-        const w = Math.round((16 + wob * 3) * grow);
-        const a = k > 0.7 ? Math.max(0, 1 - (k - 0.7) / 0.3) : 1;
-        ctx.globalAlpha = a;
-        ctx.fillStyle = "#4a080c";
-        ctx.fillRect(x - w, y - 2, w * 2, 4);
-        ctx.fillRect(x - Math.round(w * 0.6), y - 3, Math.round(w * 1.2), 6);
-        ctx.fillStyle = "#7a1016";
-        ctx.fillRect(x - Math.round(w * 0.7), y - 1, Math.round(w * 1.4), 2);
-        ctx.fillStyle = "#c01414";
-        ctx.fillRect(x - Math.round(w * 0.35), y - 1, Math.round(w * 0.7), 2);
-        ctx.globalAlpha = 1;
       } else if (s.kind === "mote" || s.kind === "vmote" || s.kind === "smote") {
-
+        // Rage ember: hot red-orange riser. Violet: phantom-flame riser.
+        // Smote: black-purple dust — dark core, violet edge as it dies.
         ctx.globalAlpha = Math.max(0, 1 - s.t / s.life);
         if (s.kind === "smote") ctx.fillStyle = s.t / s.life > 0.5 ? "#0a0a12" : "#8a3aff";
         else if (s.kind === "vmote") ctx.fillStyle = s.t / s.life > 0.5 ? "#8a3aff" : "#c9a8ff";
@@ -398,13 +347,13 @@ export const Sparks = {
         ctx.fillRect(x, y, 3, 3);
         ctx.globalAlpha = 1;
       } else if (s.kind === "dust") {
-
+        // Ground kick-up: tan motes that fade as they settle.
         ctx.globalAlpha = Math.max(0, 1 - s.t / s.life);
         ctx.fillStyle = "#9a8f7a";
         ctx.fillRect(x, y, 2, 2);
         ctx.globalAlpha = 1;
       } else {
-
+        // Shards (block), hit shards (white→red over life), and wisps.
         ctx.globalAlpha = Math.max(0, 1 - s.t / s.life);
         ctx.fillStyle = s.kind === "wisp" ? "#c9b8ff"
           : s.kind === "hshard" ? (s.t / s.life > 0.5 ? "#ff4a2a" : "#ffffff")
@@ -416,9 +365,14 @@ export const Sparks = {
   },
 };
 
+// M11 heat-vision beams: red halo + white core + hot impact head. Logic
+// spawns them with world coords; main.js draws them over the fighters.
+// (Wesker rework) 30-ton air missile: dropped from the sky onto a locked
+// ground target, then a crater bloom. Flight time is passed in so the
+// caller can sync the visual bloom with its own gameplay impact frame.
 export const Missiles = {
   list: [],
-  held: null,
+  held: null, // {x, y}: dart gripped overhead (Wesker O drop) — set per-frame
   hold(x, y) { this.held = { x, y }; },
   clear() { this.held = null; },
   launch(targetX, targetY, fallTime = 0.55) {
@@ -432,16 +386,16 @@ export const Missiles = {
   },
   update(dt) {
     for (const m of this.list) m.t += dt;
-
+    // Body flies for `fall`, crater bloom lingers 0.5 more, then gone.
     this.list = this.list.filter((m) => m.t < m.fall + 0.5);
   },
   draw(ctx, camX) {
     for (const m of this.list) {
-      const k = Math.min(1, m.t / m.fall);
+      const k = Math.min(1, m.t / m.fall); // 0 sky -> 1 target
       const x = Math.round(m.sx + (m.tx - m.sx) * k - camX);
       const y = Math.round(m.sy + (m.ty - m.sy) * k);
       if (!this.arrived(m)) {
-
+        // Falling body (post-M14.5, bigger): dark dart + long sputtering tail.
         ctx.fillStyle = "#ff7a1a";
         ctx.fillRect(x - 2, y - 26 - (m.t * 60 % 8), 5, 12);
         ctx.fillStyle = "#ffffff";
@@ -454,30 +408,32 @@ export const Missiles = {
         ctx.fillStyle = "#7a1a1a";
         ctx.fillRect(x - 4, y - 3, 8, 3);
       } else {
-
+        // 30-ton crater bloom (post-M14.5): wide fire ring, rising fire
+        // column, twin shockwave bars, thrown debris, white heart — all
+        // scaled by ease-out so the blast detonates fast then settles.
         const e = Math.min(1, (m.t - m.fall) / 0.5);
-        const ease = 1 - Math.pow(1 - e, 3);
-        const r = Math.round(18 + ease * 130);
+        const ease = 1 - Math.pow(1 - e, 3); // cubic ease-out
+        const r = Math.round(18 + ease * 130); // half-width, up to ~148px
         ctx.globalAlpha = Math.max(0, 1 - e * e);
-        ctx.fillStyle = "#2a1a12";
+        ctx.fillStyle = "#2a1a12"; // crater lip
         ctx.fillRect(x - r - 10, y - 8, (r + 10) * 2, 14);
-        ctx.fillStyle = "#ff7a1a";
+        ctx.fillStyle = "#ff7a1a"; // wide fire ring
         ctx.fillRect(x - r, y - 5, r * 2, 10);
-        ctx.fillStyle = "#ffd23e";
+        ctx.fillStyle = "#ffd23e"; // hot inner ring
         ctx.fillRect(x - Math.round(r * 0.7), y - 4, Math.round(r * 1.4), 8);
-        const colH = Math.round(ease * 150);
+        const colH = Math.round(ease * 150); // rising fire column
         ctx.fillStyle = "#ff7a1a";
         ctx.fillRect(x - 14, y - 22 - colH, 28, colH);
         ctx.fillStyle = "#ffd23e";
         ctx.fillRect(x - 8, y - 22 - Math.round(colH * 0.7), 16, Math.round(colH * 0.7));
-        const r2 = Math.round(30 + ease * 190);
+        const r2 = Math.round(30 + ease * 190); // twin shockwave bars
         ctx.fillStyle = "#ffffff";
         ctx.fillRect(x - r2, y - 10, r2 * 2, 3);
         ctx.fillRect(x - r2, y + 4, r2 * 2, 2);
-        ctx.fillStyle = "#ffffff";
+        ctx.fillStyle = "#ffffff"; // white heart over the column base
         ctx.fillRect(x - 20, y - 16, 40, 14);
         ctx.fillRect(x - 12, y - 24, 24, 10);
-        for (let d = 0; d < 10; d++) {
+        for (let d = 0; d < 10; d++) { // debris: deterministic upper-fan arc
           const a = Math.PI + ((d * 97) % 100) / 100 * Math.PI;
           const dist = ease * (70 + ((d * 53) % 90));
           const dx = Math.round(Math.cos(a) * dist);
@@ -489,7 +445,8 @@ export const Missiles = {
       }
     }
     if (this.held) {
-
+      // Gripped dart: nose-up body riding in Wesker's fists, flame sputter
+      // at the tail (holder's hands). Drawn over everything, like Missiles.
       const x = Math.round(this.held.x - camX);
       const y = Math.round(this.held.y);
       const fl = Math.round((performance.now() / 60) % 3);
@@ -509,8 +466,8 @@ export const Missiles = {
 };
 export const Beams = {
   list: [],
-  spawn(x1, y1, x2, y2, life = 0.12, color = null) {
-    this.list.push({ x1, y1, x2, y2, t: 0, life, color });
+  spawn(x1, y1, x2, y2, life = 0.12) {
+    this.list.push({ x1, y1, x2, y2, t: 0, life });
   },
   update(dt) {
     for (const b of this.list) b.t += dt;
@@ -518,115 +475,20 @@ export const Beams = {
   },
   draw(ctx, camX) {
     for (const b of this.list) {
-      const k = 1 - b.t / b.life;
+      const k = 1 - b.t / b.life; // flicker as it dies
       const x1 = Math.round(b.x1 - camX), y1 = Math.round(b.y1);
       const x2 = Math.round(b.x2 - camX), y2 = Math.round(b.y2);
       const w = Math.abs(x2 - x1);
       const x0 = Math.min(x1, x2);
-      const halo = b.color ?? "#ff3b1a";
       ctx.globalAlpha = 0.55 * k + 0.25;
-      ctx.fillStyle = halo;
+      ctx.fillStyle = "#ff3b1a"; // halo
       ctx.fillRect(x0, y1 - 3, w, 7);
       ctx.globalAlpha = 0.9 * k + 0.1;
-      ctx.fillStyle = "#ffffff";
+      ctx.fillStyle = "#ffffff"; // core
       ctx.fillRect(x0, y1 - 1, w, 3);
-      ctx.fillStyle = "#ffd0d0";
+      ctx.fillStyle = "#ffd0d0"; // impact head
       ctx.fillRect(x2 - 4, y2 - 5, 8, 11);
       ctx.globalAlpha = 1;
     }
-  },
-};
-
-export const Bolts = {
-  list: [],
-  strike(x, yGround, yTop = 0, life = 0.22) {
-    const segs = [];
-    let jx = x;
-    const n = 7;
-    for (let i = 0; i <= n; i++) {
-      segs.push(jx);
-      jx += (Math.random() - 0.5) * 26;
-    }
-    this.list.push({ segs, yGround, yTop, t: 0, life });
-  },
-  update(dt) {
-    for (const b of this.list) b.t += dt;
-    this.list = this.list.filter((b) => b.t < b.life);
-  },
-  draw(ctx, camX) {
-    for (const b of this.list) {
-      const k = Math.max(0, 1 - b.t / b.life);
-      const n = b.segs.length - 1;
-      for (let i = 0; i < n; i++) {
-        const y0 = Math.round(b.yTop + (b.yGround - b.yTop) * (i / n));
-        const y1 = Math.round(b.yTop + (b.yGround - b.yTop) * ((i + 1) / n));
-        const x = Math.round(b.segs[i] - camX);
-        ctx.globalAlpha = 0.85 * k + 0.15;
-        ctx.fillStyle = "#bff4ff";
-        ctx.fillRect(x - 2, y0, 5, y1 - y0 + 1);
-        ctx.globalAlpha = 0.9 * k + 0.1;
-        ctx.fillStyle = "#ffffff";
-        ctx.fillRect(x - 1, y0, 3, y1 - y0 + 1);
-      }
-      ctx.globalAlpha = 1;
-      const ix = Math.round(b.segs[n] - camX);
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(ix - 5, Math.round(b.yGround) - 3, 10, 4);
-    }
-  },
-};
-
-export const WebLines = {
-  list: [],
-  shoot(x1, y1, x2, y2, life = 0.08) {
-    this.list.push({ x1, y1, x2, y2, t: 0, life });
-  },
-  update(dt) {
-    for (const l of this.list) l.t += dt;
-    this.list = this.list.filter((l) => l.t < l.life);
-  },
-  draw(ctx, camX) {
-    for (const l of this.list) {
-      const k = Math.max(0, 1 - l.t / l.life);
-      const x1 = Math.round(l.x1 - camX), y1 = Math.round(l.y1);
-      const x2 = Math.round(l.x2 - camX), y2 = Math.round(l.y2);
-      ctx.globalAlpha = 0.5 * k + 0.3;
-      ctx.fillStyle = "#9fd4ff";
-      const dx = x2 - x1, dy = y2 - y1;
-      const steps = Math.max(1, Math.round(Math.hypot(dx, dy) / 3));
-      for (let i = 0; i <= steps; i++) {
-        const px = Math.round(x1 + (dx * i) / steps);
-        const py = Math.round(y1 + (dy * i) / steps);
-        ctx.fillRect(px - 1, py - 1, 3, 3);
-      }
-      ctx.globalAlpha = 0.9 * k + 0.1;
-      ctx.fillStyle = "#ffffff";
-      for (let i = 0; i <= steps; i += 2) {
-        const px = Math.round(x1 + (dx * i) / steps);
-        const py = Math.round(y1 + (dy * i) / steps);
-        ctx.fillRect(px, py, 2, 2);
-      }
-      ctx.globalAlpha = 1;
-    }
-  },
-};
-
-export const FlyingHammer = {  cur: null,
-  show(x, y, dir) { this.cur = { x, y, dir }; },
-  hide() { this.cur = null; },
-  draw(ctx, camX) {
-    const h = this.cur;
-    if (!h) return;
-    const x = Math.round(h.x - camX), y = Math.round(h.y);
-    ctx.fillStyle = "#35c8ff";
-    ctx.fillRect(x - h.dir * 26, y - 1, 24, 2);
-    ctx.fillStyle = "#1a1a20";
-    ctx.fillRect(x - 7, y - 4, 14, 9);
-    ctx.fillStyle = "#9a9ab0";
-    ctx.fillRect(x - 6, y - 3, 12, 7);
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(x - 6, y - 3, 12, 2);
-    ctx.fillStyle = "#4a3320";
-    ctx.fillRect(x + (h.dir >= 0 ? 6 : -9), y - 1, 4, 4);
   },
 };

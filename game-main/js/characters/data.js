@@ -1,3 +1,7 @@
+// Static character data. M7 will add speed/damage/health modifiers here —
+// for M1 this is identity + colors only (no magic numbers elsewhere).
+// JS concept vs Python: `Object.freeze` ≈ a read-only dict; it prevents
+// accidental mutation of shared config at runtime.
 export const CHARACTERS = Object.freeze({
   wesker: Object.freeze({
     id: "wesker",
@@ -5,12 +9,15 @@ export const CHARACTERS = Object.freeze({
     title: "The Betrayer",
     desc: "Black coat • sunglasses • superhuman swagger",
     accent: "#ff3030",
-
+    // M7 base stats, stored as multipliers over the shared tables.
+    // attackSpeed divides the fighter's own startup/active/recovery only
+    // (stun dealt, reach, and lunge distance are untouched). moveSpeed
+    // scales walk/sneak/air-drift/dash (jump arc stays shared on purpose).
     stats: Object.freeze({
-      attackSpeed: 1.30,
-      moveSpeed: 1.35,
-      damage: 0.90,
-      health: 1.00,
+      attackSpeed: 1.30, // +30% faster LMB/RMB — the speedster
+      moveSpeed: 1.35,   // +35% faster movement — fastest on roster by far
+      damage: 0.90,      // -10% MELEE damage only (gun/specials unscaled, see movesFor)
+      health: 1.00,      // +0% health — fastest, frailest, lightest per button
     }),
   }),
   homelander: Object.freeze({
@@ -20,10 +27,10 @@ export const CHARACTERS = Object.freeze({
     desc: "Blue suit • red cape • golden eagle",
     accent: "#3e6bff",
     stats: Object.freeze({
-      attackSpeed: 1.00,
-      moveSpeed: 1.00,
-      damage: 1.15,
-      health: 1.10,
+      attackSpeed: 1.00, // +0% attack speed
+      moveSpeed: 1.00,   // +0% movement
+      damage: 1.15,      // +15% melee damage (post-Samurai-Edge compensation)
+      health: 1.10,      // +10% health
     }),
   }),
   wolverine: Object.freeze({
@@ -32,12 +39,12 @@ export const CHARACTERS = Object.freeze({
     title: "The Best There Is",
     desc: "Yellow suit • black mask • adamantium claws",
     accent: "#ffd23e",
-
+    // Rushdown regenerator: fastest hands, short reach, chip+bleed tax.
     stats: Object.freeze({
-      attackSpeed: 1.25,
-      moveSpeed: 1.10,
-      damage: 1.08,
-      health: 0.95,
+      attackSpeed: 1.25, // +25% faster normals
+      moveSpeed: 1.10,   // +10% movement
+      damage: 1.08,      // +8% attack damage
+      health: 0.95,      // -5% health (regen sustains instead)
     }),
   }),
   hulk: Object.freeze({
@@ -46,84 +53,13 @@ export const CHARACTERS = Object.freeze({
     title: "The Strongest There Is",
     desc: "Green mass • purple pants • seismic slam",
     accent: "#54e03a",
-
+    // Super-heavy grappler: slowest hands and feet, biggest numbers, LARGE
+    // frame (see SIZE in fighter.js + size-aware boxes in combat.js).
     stats: Object.freeze({
-      attackSpeed: 0.95,
-      moveSpeed: 0.85,
-      damage: 1.40,
-      health: 1.35,
-    }),
-  }),
-  ironman: Object.freeze({
-    id: "ironman",
-    name: "IRON MAN",
-    title: "The Futurist",
-    desc: "Red plating • gold faceplate • repulsor zoning",
-    accent: "#ff8c1a",
-
-    stats: Object.freeze({
-      attackSpeed: 1.00,
-      moveSpeed: 0.95,
-      damage: 0.95,
-      health: 1.00,
-    }),
-  }),
-  thor: Object.freeze({
-    id: "thor",
-    name: "THOR",
-    title: "God of Thunder",
-    desc: "Winged helm • red cape • Mjolnir bruiser",
-    accent: "#7fd4ff",
-
-    stats: Object.freeze({
-      attackSpeed: 1.05,
-      moveSpeed: 0.95,
-      damage: 1.10,
-      health: 1.15,
-    }),
-  }),
-  spiderman: Object.freeze({
-    id: "spiderman",
-    name: "SPIDER-MAN",
-    title: "Web-Head",
-    desc: "Red mask • web-shooters • aerial trickster",
-    accent: "#ff3b3b",
-
-    stats: Object.freeze({
-      attackSpeed: 1.15,
-      moveSpeed: 1.05,
-      damage: 0.50,
-      health: 0.95,
-    }),
-  }),
-  doom: Object.freeze({
-    id: "doom",
-    name: "DR. DOOM",
-    title: "Monarch of Latveria",
-    desc: "Steel mask • green cloak • plasma + missiles",
-    accent: "#2fae5a",
-
-    stats: Object.freeze({
-      attackSpeed: 1.00,
-      moveSpeed: 0.90,
-      damage: 1.05,
-      health: 1.15,
-    }),
-  }),
-  uroboros: Object.freeze({
-    id: "uroboros",
-    name: "UROBOROS",
-    title: "Unstable Evolution",
-    desc: "Shirtless Wesker • tentacle mass • hidden",
-    accent: "#ff7a1a",
-    hidden: true,
-
-    stats: Object.freeze({
-      attackSpeed: 1.05,
-      moveSpeed: 0.95,
-      damage: 1.35,
-      health: 1.45,
+      attackSpeed: 0.95, // -5% slower normals (still slowest, no longer free pressure)
+      moveSpeed: 0.85,   // -15% movement (walks you down, doesn't chase)
+      damage: 1.35,      // +35% attack damage
+      health: 1.35,      // +35% health (135 HP wall)
     }),
   }),
 });
-
