@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<link rel="icon" href="data:," />
 <title>PIXEL BRAWL — Wesker vs Homelander</title>
 <link rel="stylesheet" href="css/style.css" />
 </head>
@@ -11,7 +12,6 @@
   <div id="stage">
     <canvas id="game" width="960" height="540"></canvas>
 
-    <!-- Main menu overlay -->
     <div id="screen-menu" class="screen visible">
       <div class="title-pixel">PIXEL BRAWL</div>
       <div class="subtitle">Wesker vs Homelander • procedural pixel-art brawl</div>
@@ -20,66 +20,100 @@
         <button id="btn-howto" class="pbtn ghost">HOW TO PLAY</button>
         <button id="btn-spin" class="pbtn ghost">SPIN STRIKES: ON</button>
       </div>
+      <div class="menu-buttons">
+        <button id="btn-host" class="pbtn ghost">🌐 HOST LAN (P1)</button>
+        <button id="btn-join" class="pbtn ghost">🔗 JOIN LAN (P2)</button>
+      </div>
+      <div class="net-row hidden" id="net-row">
+        <input id="net-ip" placeholder="host IP (e.g. 192.168.1.5)" />
+        <input id="net-port" placeholder="8125" />
+        <button id="btn-connect" class="pbtn small">CONNECT</button>
+        <button id="btn-netback" class="pbtn small ghost">BACK</button>
+      </div>
+      <div id="net-status" class="hidden"></div>
+      <div id="unlock-flash" class="hidden"></div>
       <div id="howto" class="howto hidden">
-        <p><b>A / D</b> — walk (P1) &nbsp; • &nbsp; <b>← / →</b> — walk (P2)</p>
-        <p><b>W / ↑</b> — jump &nbsp; • &nbsp; <b>S / ↓</b> — crouch (hold + move = sneak)</p>
-        <p><b>AA / DD</b> — backdash / forward dash (double-tap direction)</p>
-        <p><b>S + AA / DD</b> — Wesker Shadow Step: spammable teleport in the tapped direction (wrong way = self-cross-up)</p>
-        <p><b>LMB / J</b> — light chain ×3 &nbsp; • &nbsp; <b>RMB / K</b> — Wesker: Cobra Strike • Homelander: grab-throw • Hulk: Seismic Slam (L = crushing grab, 16 dmg)</p>
-        <p><b>E</b> — Wesker: Samurai Edge (instant burst shot with i-frames; fires from neutral, guard, dash, hitstun or mid-swing — sneak ducks it)</p>
-        <p><b>,</b> — P2 light &nbsp; • &nbsp; <b>.</b> — P2 heavy</p>
-        <p><b>Hold AWAY</b> — walk back, auto-guard in range &nbsp; • &nbsp; <b>S + AWAY</b> — crouch block</p>
-        <p>Overheads beat crouch-block • lows beat stand-block • mids stopped by either</p>
-        <p><b>L / /</b> — grab (P1 / P2): beats block, loses to strikes</p>
-        <p><b>X / N</b> — tag out (P1 / P2): swap to the next alive member (grounded neutral only, costs half a rage bar, 1s cooldown, HP persists)</p>
-        <p><b>C / B</b> — tag alt (trio): jump straight to the other bench fighter</p>
-        <p><b>Space / F / O</b> — Wesker: Jaguar (1) / Phantom (2) / Rage (3) — burst instantly from anywhere (mid-combo, stun, air, guard) with i-frames &nbsp; • &nbsp; P2 mirror: <b>;</b> / <b>'</b> / <b>P</b></p>
-        <p><b>Space / F / O</b> — Homelander: Laser (1) / Scream (2) / Rage (3) — crouch ducks the laser!</p>
-        <p><b>Space / F / O</b> — Hulk: Gamma Charge (1) / Thunder Clap (2) / Worldbreaker (3) — slowest windups, biggest payoffs</p>
-        <p><b>T / U</b> — grant rage level (P1 / P2 test hook)</p>
-        <p><b>SPIN STRIKES</b> — menu toggle: Wolverine turns through every right-hand swing (ON) or slashes plain (OFF)</p>
+        <p><b>A / D</b> — walk (P1) &nbsp; • &nbsp; <b>← / →</b> — walk (P2) &nbsp; • &nbsp; <b>W / ↑</b> — jump &nbsp; • &nbsp; <b>S / ↓</b> — crouch (hold + move = sneak)</p>
+        <p><b>AA / DD</b> — backdash / forward dash &nbsp; • &nbsp; <b>LMB / J</b> — light chain ×3 &nbsp; • &nbsp; <b>,</b> — P2 light &nbsp; • &nbsp; <b>.</b> — P2 heavy</p>
+        <p><b>Hold AWAY</b> — walk back, auto-guard &nbsp; • &nbsp; <b>S + AWAY</b> — crouch block &nbsp; • &nbsp; Overheads beat crouch-block • lows beat stand-block • mids stopped by either</p>
+        <p><b>L / /</b> — grab (P1 / P2): beats block, loses to strikes &nbsp; • &nbsp; <b>X / N</b> — tag out: next alive member (grounded neutral, half rage bar, 1s cooldown) &nbsp; • &nbsp; <b>C / B</b> — tag alt (trio)</p>
+        <details class="howto-sec">
+          <summary>WESKER — speedster</summary>
+          <p><b>RMB / K</b> — Cobra Strike &nbsp; • &nbsp; <b>E</b> — Samurai Edge (burst shot with i-frames; neutral, guard, dash, hitstun, mid-swing — sneak ducks it)</p>
+          <p><b>S + AA / DD</b> — Shadow Step: spammable teleport in the tapped direction (wrong way = self-cross-up)</p>
+          <p><b>Space / F / O</b> — Jaguar (1) / Phantom (2) / Rage (3): burst instantly from anywhere with i-frames &nbsp; • &nbsp; P2 mirror: <b>;</b> / <b>'</b> / <b>P</b></p>
+        </details>
+        <details class="howto-sec">
+          <summary>HOMELANDER — zoner</summary>
+          <p><b>RMB / K</b> — grab-throw (no heavy strike)</p>
+          <p><b>Space / F / O</b> — Laser (1) / Scream (2) / Rage (3) — crouch ducks the laser!</p>
+        </details>
+        <details class="howto-sec">
+          <summary>WOLVERINE — rushdown</summary>
+          <p>Chip + bleed on every slash &nbsp; • &nbsp; heals out of combat &nbsp; • &nbsp; <b>SPIN STRIKES</b> menu toggle turns him through every swing</p>
+          <p><b>Space / F / O</b> — Adamantium Rush (1) / Berserker Barrage (2) / Weapon X Surge (3)</p>
+        </details>
+        <details class="howto-sec">
+          <summary>HULK — wall</summary>
+          <p><b>RMB / K</b> — Seismic Slam &nbsp; • &nbsp; <b>L</b> — crushing grab (16 dmg) &nbsp; • &nbsp; LARGE frame: easy to hit, crouch still ducks rays</p>
+          <p><b>Space / F / O</b> — Gamma Charge (1) / Thunder Clap (2) / Worldbreaker (3)</p>
+        </details>
+        <details class="howto-sec">
+          <summary>IRON MAN — long range</summary>
+          <p><b>E</b> — Repulsor: free spacing poke, no i-frames, never from stun — crouch ducks it</p>
+          <p><b>Space / F / O</b> — Repulsor Burst (1) / Uni-Beam (2) / Mark Shelling (3) — clear the missile marks!</p>
+        </details>
+        <details class="howto-sec">
+          <summary>THOR — bruiser</summary>
+          <p><b>E</b> — Mjolnir Toss: free hammer poke, must guard/jump (crouch does NOT duck it)</p>
+          <p><b>Space / F / O</b> — Storm Throw (1, boomerang hammer) / Call Lightning (2) / Godblast (3, 4s lightning barrage)</p>
+        </details>
+        <details class="howto-sec">
+          <summary>SPIDER-MAN — trickster</summary>
+          <p><b>E</b> — Web-Zip: 280px dash, costs half a rage bar (ground + air)</p>
+          <p><b>AA / DD mid-air</b> — Web-Swing: fires a web upward and swings forward</p>
+          <p><b>Space / F / O</b> — Web Shot (1, mummy root 0.7s) / Web Yank (2, grab-pull + slam) / Spider Maelstrom (3, 6-hit blink + cocoon finale)</p>
+        </details>
+        <details class="howto-sec">
+          <summary>DR. DOOM — monarch</summary>
+          <p><b>E</b> — Photon Shot: free poke — crouch ducks it</p>
+          <p><b>BACK + RMB/K</b> — Finger Snap: sky missile at foe (dash to escape), 0.4s cooldown</p>
+          <p><b>Space / F / O</b> — Plasma Beam (1, thick yellow) / Plasma Stack (half-bar, 4 beams) / Throne of Doom (3, 35 total + 1s knockdown)</p>
+        </details>
+        <details class="howto-sec hidden" id="howto-uroboros">
+          <summary>UROBOROS — hidden plague</summary>
+          <p><b>LMB / J</b> — tentacle sweeps: the longest, hardest-hitting normals in the game, they carve bleeding holes &amp; stain the ground &nbsp;• &nbsp; <b>RMB / K</b> — heavy slam &nbsp;• &nbsp; no teleport, no gun</p>
+          <p><b>Space / F / O</b> — Constrictor (1, wrap + throw) / Bedrock Crush (2) / Impalement (3, 10 + 30 decay + permanent vuln: +10% all damage, +25% heat)</p>
+        </details>
         <p><b>H</b> — hitboxes &nbsp; • &nbsp; <b>R</b> — reset</p>
       </div>
       <div class="foot">Wesker vs Homelander • procedural pixel-art • no assets needed</div>
     </div>
 
-    <!-- Character select overlay -->
     <div id="screen-char" class="screen">
       <div class="screen-title">CHOOSE YOUR FIGHTERS</div>
+      <div class="draft-strips">
+        <div class="strip" id="strip-p1">
+          <span class="slot-label">P1 TEAM — click a member to remove</span>
+          <div class="members" id="members-p1"></div>
+        </div>
+        <div class="draft-side">
+          <span class="slot-label">DRAFT</span>
+          <button class="pbtn small" data-side="1">P1</button>
+          <button class="pbtn small ghost" data-side="2">P2</button>
+          <button class="pbtn small ghost" data-cpu-draft title="CPU answers each P1 pick in order">CPU DRAFT</button>
+        </div>
+        <div class="strip" id="strip-p2">
+          <span class="slot-label">P2 TEAM — click a member to remove</span>
+          <div class="members" id="members-p2"></div>
+        </div>
+      </div>
+      <div class="roster" id="roster"></div>
       <div class="diff-row" id="team-row">
         <span class="slot-label">TEAM:</span>
         <button class="pbtn small ghost" data-team="1">SOLO</button>
         <button class="pbtn small" data-team="2">DUO</button>
         <button class="pbtn small ghost" data-team="3">TRIO</button>
-      </div>
-      <div class="char-row">
-        <div class="char-card" id="p1-card">
-          <div class="slot-label">P1 (You)</div>
-          <div class="portrait" id="p1-portrait"></div>
-          <div class="char-name" id="p1-name">WESKER</div>
-          <div class="char-team" id="p1-team"></div>
-          <div class="char-stats" id="p1-stats"></div>
-          <div class="char-btns">
-            <button class="pbtn small" data-p="1" data-c="wesker">WESKER</button>
-            <button class="pbtn small ghost" data-p="1" data-c="homelander">HOMELANDER</button>
-            <button class="pbtn small ghost" data-p="1" data-c="wolverine">WOLVERINE</button>
-            <button class="pbtn small ghost" data-p="1" data-c="hulk">HULK</button>
-          </div>
-        </div>
-        <div class="vs">VS</div>
-        <div class="char-card" id="p2-card">
-          <div class="slot-label">P2 (CPU preview dummy)</div>
-          <div class="portrait" id="p2-portrait"></div>
-          <div class="char-name" id="p2-name">HOMELANDER</div>
-          <div class="char-team" id="p2-team"></div>
-          <div class="char-stats" id="p2-stats"></div>
-          <div class="char-btns">
-            <button class="pbtn small ghost" data-p="2" data-c="wesker">WESKER</button>
-            <button class="pbtn small" data-p="2" data-c="homelander">HOMELANDER</button>
-            <button class="pbtn small ghost" data-p="2" data-c="wolverine">WOLVERINE</button>
-            <button class="pbtn small ghost" data-p="2" data-c="hulk">HULK</button>
-          </div>
-        </div>
       </div>
       <button id="btn-to-maps" class="pbtn">CONTINUE → MAPS</button>
       <div class="diff-row">
@@ -91,7 +125,6 @@
       </div>
     </div>
 
-    <!-- Map select overlay -->
     <div id="screen-map" class="screen">
       <div class="screen-title">SELECT STAGE</div>
       <div class="map-row">
@@ -104,15 +137,16 @@
       <button id="btn-back-char" class="pbtn ghost">← BACK</button>
     </div>
 
-    <!-- Fight HUD (canvas-drawn bars + small DOM toolbar) -->
     <div id="fight-bar" class="hidden">
       <span id="fight-label">PIXEL BRAWL</span>
       <button id="btn-quit" class="pbtn small ghost">QUIT TO MENU</button>
       <button id="btn-swap-map" class="pbtn small ghost">SWAP MAP (M)</button>
     </div>
+    <div id="net-drop" class="hidden"></div>
   </div>
   <div id="hint">LMB/J light • RMB/K heavy • E Samurai Edge • L grab • X/C tag • Space/F/O specials • T/U rage • H hitboxes • R reset • ESC menu</div>
 </div>
 <script type="module" src="js/main.js"></script>
 </body>
 </html>
+

@@ -1,36 +1,28 @@
-// M10 Wesker special implementations (M11 adds Homelander's here).
-// Each special is a small scripted machine on f.special scratch:
-// { phase, t, i, struck, struckThis, acc, frame, }. Frames are assigned as
-// canvases every tick; fighter.currentFrame just shows f.special.frame.
-// Camera trauma goes out through f.camKick (main.js drains it like contact).
-import { WESKER_SPECIALS, HOMELANDER_SPECIALS, WOLVERINE_SPECIALS, HULK_SPECIALS } from "./data.js";
-import { resolveStrike, Hitstop } from "./combat.js";
-import { clampArena } from "../physics.js";
-import { Sparks, Clones, Beams, Missiles } from "../effects.js";
+import { WESKER_SPECIALS, HOMELANDER_SPECIALS, WOLVERINE_SPECIALS, HULK_SPECIALS, IRONMAN_SPECIALS, THOR_SPECIALS, UROBOROS_SPECIALS, SPIDERMAN_SPECIALS, DOOM_SPECIALS, DECAY } from "./data.js";
+import { resolveStrike, Hitstop, vulnMult, overlap, hurtboxOf } from "./combat.js";
+import { clampArena, integrateAir } from "../physics.js";
+import { Sparks, Clones, Beams, Missiles, Bolts, FlyingHammer, WebLines, Flash, PlasmaOrbs, Portals } from "../effects.js";
+import { Fighter } from "../characters/fighter.js";
+import { AIController } from "../ai.js";
 import { AudioFX } from "../audio.js";
-import { GROUND_Y } from "../config.js";
+import { GROUND_Y, MOVE } from "../config.js";
 import { arena } from "../arena.js";
 
 function endSpecial(f) {
-  // Homelander's rage flight leaves y; snap exact ground on exit.
+
   if (f.special && f.special.airborne) {
     f.y = GROUND_Y;
     f.vy = 0;
     f.grounded = true;
   }
+  // The held warhead belongs to the rage finisher only, but a special can be
+  // cut short mid-aim — never leave the missile welded to a fighter's hands.
+  Missiles.clear();
   f.state = "IDLE";
   f.specialId = null;
   f.special = null;
 }
 
-// Shared burst entry: EVERY super fires INSTANTLY from (almost) any state —
-// mid-swing, mid-dash, mid-jump, guard, sneak, grounded stun. Only refused:
-// KO'd, already mid-super, or physically held/holding (GRAB/THROWN — a
-// body lock beats meter). Costs + range leash still apply: out-of-range
-// presses fizzle WITHOUT spending. Air activations snap to the ground first
-// (supers are grounded cinematics; SPECIAL skips gravity, so this avoids a
-// hang-in-air bug). Normal-attack and stun leftovers are scrubbed, and entry
-// i-frames make it a true burst. Returns the spec on success, null on refusal.
 function beginSpecial(f, foe, table, id) {
   const spec = table[id];
   if (!spec || f.hp <= 0 || f.freezeT > 0) return null;
@@ -38,11 +30,11 @@ function beginSpecial(f, foe, table, id) {
   if (f.rageLevel < spec.cost) return null;
   if (Math.abs(foe.x - f.x) > spec.maxRange) return null;
   if (!f.spendRage(spec.cost)) return null;
-  // Land first: an air super becomes a grounded one on the spot.
+
   f.y = GROUND_Y;
   f.vy = 0;
   f.grounded = true;
-  // Scrub whatever we interrupt: swings, chains, stun slides.
+
   f.attackId = null;
   f.phase = null;
   f.chainQueued = false;
@@ -54,15 +46,12 @@ function beginSpecial(f, foe, table, id) {
   f.state = "SPECIAL";
   f.specialId = id;
   f.special = { phase: null, t: 0, i: 0, struck: false, struckThis: false, acc: 0, frame: null };
-  f.invulnT = Math.max(f.invulnT, 0.35); // burst i-frames on entry
+  f.invulnT = Math.max(f.invulnT, 0.35);
   return spec;
 }
 
-// Entry gates: Wesker-only (M10), rage paid up front, and a maxRange leash.
-// State is NOT gated — neutral, guard, dash, sneak, jump, stun, mid-swing
-// all fire (see beginSpecial); out-of-range presses fizzle WITHOUT spending.
 export function tryWeskerSpecial(f, id, foe) {
-  if (f.kind !== "wesker") return false;
+  if ((f.kind !== "wesker" && f.kind !== "cheatwesker")) return false;
   const spec = beginSpecial(f, foe, WESKER_SPECIALS, id);
   if (!spec) return false;
   f.attackDir = f.facing;
@@ -72,23 +61,24 @@ export function tryWeskerSpecial(f, id, foe) {
   const t0 = id === "jaguar" ? spec.startup : id === "phantom" ? spec.openTime : spec.transform;
   f.special = { phase: first, t: t0, i: 0, struck: false, struckThis: false, acc: 0, frame: null };
   if (id === "ragemode") {
-    // Level-3 time-stop: the victim stands pinned for the whole apotheosis
-    // (transform + every frenzy pass + the missile ride + recovery margin).
+
+    if (f.kind === "cheatwesker") f.enterWeskerRage();
     foe.freezeT = spec.transform + spec.frames.length * spec.strikeTime +
       (spec.frames.length - 1) * spec.gapTime +
       spec.rise + spec.aim + spec.drop + spec.recover + 0.15;
     Hitstop.t = Math.max(Hitstop.t, 0.2);
     Sparks.ring(foe.x, foe.y - 80, 110);
-    AudioFX.powerup(); // transformation sting on entry
+    AudioFX.powerup();
   }
   return true;
 }
 
 export function updateSpecial(f, foe, dt) {
-  if (f.kind === "wesker" && f.specialId) {
+  if ((f.kind === "wesker" || f.kind === "cheatwesker") && f.specialId) {
     if (f.specialId === "jaguar") updateJaguar(f, foe, dt);
     else if (f.specialId === "phantom") updatePhantom(f, foe, dt);
     else if (f.specialId === "shadow") updateShadow(f, foe, dt);
+    else if (f.specialId === "missile") updateWeskerMissile(f, foe, dt);
     else updateRageMode(f, foe, dt);
     return;
   }
@@ -110,18 +100,46 @@ export function updateSpecial(f, foe, dt) {
     else updateBreaker(f, foe, dt);
     return;
   }
-  endSpecial(f); // unknown kit: never strand in SPECIAL
+  if (f.kind === "ironman" && f.specialId) {
+    if (f.specialId === "burst") updateBurst(f, foe, dt);
+    else if (f.specialId === "unibeam") updateUnibeam(f, foe, dt);
+    else updateShelling(f, foe, dt);
+    return;
+  }
+  if (f.kind === "thor" && f.specialId) {
+    if (f.specialId === "storm") updateStorm(f, foe, dt);
+    else if (f.specialId === "lightning") updateLightning(f, foe, dt);
+    else updateGodblast(f, foe, dt);
+    return;
+  }
+  if (f.kind === "uroboros" && f.specialId) {
+    if (f.specialId === "wrap") updateWrap(f, foe, dt);
+    else if (f.specialId === "rock") updateRock(f, foe, dt);
+    else updateImpale(f, foe, dt);
+    return;
+  }
+  if (f.kind === "spiderman" && f.specialId) {
+    if (f.specialId === "webshot") updateWebshot(f, foe, dt);
+    else if (f.specialId === "yank") updateYank(f, foe, dt);
+    else if (f.specialId === "maelstrom") updateMaelstrom(f, foe, dt);
+    else if (f.specialId === "zip") updateZip(f, foe, dt);
+    else if (f.specialId === "swing") updateSwing(f, foe, dt);
+    else endSpecial(f);
+    return;
+  }
+  if (f.kind === "doom" && f.specialId) {
+    if (f.specialId === "snap") updateDoomSnap(f, foe, dt);
+    else if (f.specialId === "throne") updateDoomThrone(f, foe, dt);
+    else if (f.specialId === "barrage") updateDoomBarrage(f, foe, dt);
+    else if (f.specialId === "bot") updateDoomBot(f, foe, dt);
+    else endSpecial(f);
+    return;
+  }
+  endSpecial(f);
 }
 
-// --- Shadow Step (Wesker, meterless, spammable): S + double-tap A/D -----
-// Manual teleport: fixed distance in the TAPPED screen direction — never
-// auto-tracks the foe, so a wrong-way tap crosses you up or corners you.
-// Vanish (hittable) -> instant shift (brief invuln) -> reform (punishable).
-// No rage cost, no cooldown beyond the ~0.32s animation: spam is allowed,
-// hard reads are rewarded. Grounded neutral/guard/dash only — no bursting
-// out of stun, no air escapes, never cancels a swing or a super.
 export function tryWeskerShadow(f, screenDir) {
-  if (f.kind !== "wesker") return false;
+  if ((f.kind !== "wesker" && f.kind !== "cheatwesker")) return false;
   const spec = WESKER_SPECIALS.shadow;
   if (!spec || f.hp <= 0 || f.freezeT > 0 || !f.grounded) return false;
   if (f.state === "SPECIAL" || f.state === "KO" || f.state === "GRAB" ||
@@ -139,6 +157,10 @@ export function tryWeskerShadow(f, screenDir) {
     phase: "vanish", t: spec.vanish, dir: screenDir >= 0 ? 1 : -1,
     acc: 0, frame: null,
   };
+
+  // The full invulnerability window across the whole blink is a cheat-Wesker
+  // luxury; og's shadow only covers the shift itself.
+  f.invulnT = Math.max(f.invulnT, f.kind === "cheatwesker" ? spec.vanish + spec.shift + spec.reform : 0);
   return true;
 }
 
@@ -148,20 +170,20 @@ function updateShadow(f, foe, dt) {
   const A = f.sprites;
   s.t -= dt;
   if (s.phase === "vanish") {
-    s.frame = A.attack[4]; // coil into the floor (hittable — stuff it here)
+    s.frame = A.attack[4];
     s.acc += dt;
     if (s.acc >= 0.03) {
       s.acc = 0;
       Sparks.shadowburst(f.x, f.y);
     }
     if (s.t <= 0) {
-      // Vanish: black silhouette stays, body shifts the full distance.
+
       Clones.spawn(f.currentFrame(), f.x, f.y, f.facing, 0.45, "shadow");
       Sparks.shadowburst(f.x, f.y);
       AudioFX.whoosh();
       f.x += s.dir * spec.dist;
       clampArena(f);
-      // Facing does NOT auto-correct — hold toward the foe or eat a cross-up.
+
       s.phase = "shift";
       s.t = spec.shift;
       f.invulnT = Math.max(f.invulnT, spec.shift + 0.03);
@@ -169,14 +191,14 @@ function updateShadow(f, foe, dt) {
   } else if (s.phase === "shift") {
     s.frame = A.dash[0];
     if (s.t <= 0) {
-      // Reform: black-purple dust where he arrives, punishable from here.
+
       Sparks.shadowburst(f.x, f.y);
       Clones.spawn(f.currentFrame(), f.x, f.y, f.facing, 0.3, "shadow");
       s.phase = "reform";
       s.t = spec.reform;
     }
   } else {
-    s.frame = A.crouch[0]; // low reform crouch — rising out of the dust
+    s.frame = A.crouch[0];
     s.acc += dt;
     if (s.acc >= 0.05) {
       s.acc = 0;
@@ -186,7 +208,6 @@ function updateShadow(f, foe, dt) {
   }
 }
 
-// --- Jaguar Charge: coil, then an invulnerable driving tackle ---------------
 function jaguarMove(spec) {
   return {
     damage: spec.damage, hitstun: spec.hitstun, knockback: spec.knockback,
@@ -201,28 +222,27 @@ function updateJaguar(f, foe, dt) {
   const A = f.sprites;
   s.t -= dt;
   if (s.phase === "startup") {
-    s.frame = A.attack[4]; // coiled windup (hittable — stuff it here)
+    s.frame = A.attack[4];
     if (s.t <= 0) {
       s.phase = "dash";
       s.t = spec.dashTime;
       s.struckThis = false;
-      // Exact-px travel budget (M7 lunge precedent): frame quantization must
-      // never extend a super's reach past its nominal 262.5px.
+
       s.distLeft = spec.dashSpeed * spec.dashTime;
-      s.acc = 0; // violet trail timer (see dash branch)
-      f.invulnT = spec.dashTime + 0.05; // untouchable once driving
+      s.acc = 0;
+      f.invulnT = spec.dashTime + 0.05;
       AudioFX.whoosh();
       Sparks.puff(f.x, f.y - 60);
       Clones.spawn(f.currentFrame(), f.x, f.y, f.facing, 0.3);
     }
   } else if (s.phase === "dash") {
-    // Two-frame drive: alternate lean so the tackle visibly pumps.
+
     s.frame = (Math.floor(s.t * 25) % 2 === 0) ? A.special[0] : A.dash[0];
     const want = Math.min(spec.dashSpeed * dt, s.distLeft);
     f.x += f.attackDir * want;
     s.distLeft -= want;
     clampArena(f);
-    // Purple phantom-flame trail while driving.
+
     s.acc += dt;
     while (s.acc >= 0.04) {
       s.acc -= 0.04;
@@ -233,8 +253,7 @@ function updateJaguar(f, foe, dt) {
       if (contact) {
         s.struckThis = true;
         f.camKick = Math.max(f.camKick, 0.35);
-        // Driving tackle: clean hits drop the victim prone (0.4s down);
-        // blocked hits shove, then break the guard into the same fall.
+
         if (foe.hp > 0) {
           if (contact.type === "hit") foe.knockdown(f.attackDir, spec.knockback);
           else foe.crumple = true;
@@ -246,38 +265,35 @@ function updateJaguar(f, foe, dt) {
       s.t = spec.recover;
       f.invulnT = Math.min(f.invulnT, 0.05);
       Sparks.puff(f.x, f.y - 40);
-      Sparks.dust(f.x, GROUND_Y); // skid-out stop
+      Sparks.dust(f.x, GROUND_Y);
       f.camKick = Math.max(f.camKick, 0.15);
     }
   } else {
-    s.frame = A.dash[0]; // skate-out follow-through
+    s.frame = A.dash[0];
     if (s.t <= 0) endSpecial(f);
   }
 }
 
-// --- Phantom Combo: five teleport strikes, alternating sides ----------------
 function phantomMove(spec, i) {
   const h = spec.hits[i];
   return {
     damage: h.damage, hitstun: h.stun, knockback: h.knock, hitstop: h.stop,
-    // Short guard lock (0.15) vs the 0.24 strike rhythm: a held guard
-    // recovers between teleport hits, so blocking the super costs chip,
-    // not the full combo. Dropping guard mid-string still gets opened.
+
     level: "mid", blockstun: 0.15, blockPush: 200, chip: h.chip, hit: spec.hit,
   };
 }
 
 function phantomBlink(f, foe, i) {
   const spec = WESKER_SPECIALS.phantom;
-  // Afterimage stays where we stood; violet fire marks where we arrive.
+
   Clones.spawn(f.currentFrame(), f.x, f.y, f.facing, 0.35);
-  Sparks.puff(f.x, f.y - 80); // vanish...
-  AudioFX.whoosh(); // M14: each blink has a rush
+  Sparks.puff(f.x, f.y - 80);
+  AudioFX.whoosh();
   f.x = foe.x + spec.sides[i] * 58;
   clampArena(f);
   f.attackDir = foe.x >= f.x ? 1 : -1;
   f.facing = f.attackDir;
-  Sparks.puff(f.x, f.y - 80); // ...reappear striking
+  Sparks.puff(f.x, f.y - 80);
   for (let k = 0; k < 3; k++) Sparks.violet(f.x + (Math.random() - 0.5) * 40, f.y - 40 - Math.random() * 60);
   f.special.frame = f.sprites.attack[spec.frames[i]];
   f.special.struckThis = false;
@@ -289,7 +305,7 @@ function updatePhantom(f, foe, dt) {
   s.t -= dt;
   if (s.phase === "open") {
     s.frame = f.sprites.attack[4];
-    f.invulnT = 1.9; // whole sequence is untouchable (paid 2 bars)
+    f.invulnT = 1.9;
     if (s.t <= 0) {
       s.i = 0;
       phantomBlink(f, foe, 0);
@@ -306,7 +322,7 @@ function updatePhantom(f, foe, dt) {
         f.camKick = Math.max(f.camKick, 0.15);
         const last = s.i === spec.hits.length - 1;
         if (last) {
-          // Finale slams down (clean hits only — guards just shove).
+
           if (contact.type === "hit" && foe.hp > 0) {
             foe.knockdown(f.attackDir, spec.hits[s.i].knock, spec.hits[s.i].launch);
           }
@@ -316,7 +332,7 @@ function updatePhantom(f, foe, dt) {
     }
     if (s.t <= 0) {
       if (s.i === 0 && !s.struck) {
-        s.phase = "recover"; // opening whiffed: abort the super, eat recovery
+        s.phase = "recover";
         s.t = spec.recover;
       } else if (s.i >= spec.hits.length - 1) {
         s.phase = "recover";
@@ -339,17 +355,12 @@ function updatePhantom(f, foe, dt) {
   }
 }
 
-// --- Rage Mode REWORK: unmask (1s) -> six black-afterimage frenzy passes
-// (5 each, guardable) -> skyward leap -> 30-ton missile dive (35). ~4s,
-// ~65 total, invulnerable throughout. Blocking the frenzy (6 chip) buys
-// the space to dash clear of the locked missile target — eat it standing
-// and the crater is yours.
-function rageFrenzyMove(spec) {
+function rageFrenzyMove(spec, i = 0) {
   const h = spec.frenzy;
+  const last = i === spec.frames.length - 1;
   return {
-    damage: h.damage, hitstun: h.stun, knockback: h.knock, hitstop: h.stop,
-    // Short guard lock vs the 0.22 strike rhythm (phantom lesson): held
-    // guard recovers between passes instead of stun-trapping into full.
+    damage: last ? h.finisher : h.damage, hitstun: h.stun, knockback: h.knock, hitstop: h.stop,
+
     level: "mid", blockstun: 0.15, blockPush: 200, chip: h.chip, hit: spec.hit,
   };
 }
@@ -358,13 +369,13 @@ function rageMissileMove(spec) {
   return {
     damage: spec.missile, hitstun: spec.missileStun, knockback: spec.missileKnock,
     hitstop: spec.missileStop, level: "mid", blockstun: 0.50, blockPush: 600,
-    chip: spec.missileChip, hit: { w: 120, top: 140, h: 100 },
+    chip: spec.missileChip, sky: true, hit: { w: 120, top: 140, h: 100 },
   };
 }
 
 function rageBlink(f, foe, i) {
   const spec = WESKER_SPECIALS.ragemode;
-  // Black silhouette stays where he stood; red fire marks where he arrives.
+
   Clones.spawn(f.currentFrame(), f.x, f.y, f.facing, 0.45, "shadow");
   Sparks.puff(f.x, f.y - 80);
   f.x = foe.x + spec.sides[i] * 62;
@@ -378,24 +389,80 @@ function rageBlink(f, foe, i) {
   f.special.struckThis = false;
 }
 
+const WESKER_MISSILE_MOVE = Object.freeze({
+  damage: 14, hitstun: 0.5, hitstop: 0.09, knockback: 620, missileKnock: 600,
+  level: "mid", blockstun: 0.3, blockPush: 420, chip: 2,
+  hit: Object.freeze({ w: 90, top: 150, h: 90 }),
+});
+
+function updateWeskerMissile(f, foe, dt) {
+  const s = f.special;
+  const A = f.sprites;
+  s.t -= dt;
+  if (s.phase === "throw") {
+    s.frame = A.special[7];
+
+    const k = 1 - Math.max(0, s.t) / 0.22;
+    const spring = Math.sin(Math.min(1, k * 1.4) * Math.PI);
+    Missiles.hold(f.x + f.attackDir * (26 + spring * 30), f.y - 118 - spring * 6, { big: true, horiz: f.attackDir });
+    if (s.t <= 0) {
+      s.phase = "fly";
+      s.t = 1.4;
+      s.mx = f.x + f.attackDir * 46;
+      s.my = f.y - 120;
+      AudioFX.whoosh();
+    }
+  } else if (s.phase === "fly") {
+    s.frame = A.special[6];
+    s.mx += f.attackDir * 950 * dt;
+    Missiles.hold(s.mx, s.my, { big: true, horiz: f.attackDir });
+    Sparks.ember(s.mx - f.attackDir * 50, s.my + (Math.random() - 0.5) * 20);
+    let boom = s.t <= 0;
+    if (!s.hit) {
+      const box = { x: f.attackDir === 1 ? s.mx : s.mx - 90, y: s.my - 45, w: 90, h: 90 };
+      const contact = resolveStrike(f, foe, WESKER_MISSILE_MOVE, box);
+      if (contact) {
+        s.hit = true;
+        boom = true;
+        if (contact.type === "hit") foe.knockdown(f.attackDir, 500);
+        else foe.crumple = true;
+      }
+    }
+    if (Math.abs(s.mx - f.x) > 1400) boom = true;
+    if (boom) {
+      Missiles.clear();
+      Missiles.boom(s.mx, GROUND_Y, true);
+      Flash.boom(0.5, 0.8);
+      Sparks.hit(s.mx, s.my, f.attackDir);
+      f.camKick = Math.max(f.camKick, 0.9);
+      AudioFX.boom();
+      s.phase = "recover";
+      s.t = 0.4;
+    }
+  } else {
+    s.frame = A.idle[0];
+    if (s.t <= 0) endSpecial(f);
+  }
+}
+
 function updateRageMode(f, foe, dt) {
   const spec = WESKER_SPECIALS.ragemode;
   const s = f.special;
   const A = f.sprites;
   s.t -= dt;
   if (s.phase === "transform") {
-    // Three-beat apotheosis: coil (glasses on) -> rip-off -> burning stand.
+
     const k = 1 - Math.max(0, s.t) / spec.transform;
     if (k < 0.35) {
-      s.frame = A.attack[4]; // coiled, glasses still on
+      s.frame = A.attack[4];
     } else if (k < 0.7) {
       if (!s.beat2) {
         s.beat2 = true;
-        AudioFX.whoosh(); // glasses torn away
+        AudioFX.whoosh();
         Sparks.puff(f.x, f.y - 100);
         f.camKick = Math.max(f.camKick, 0.35);
       }
-      s.frame = A.special[4]; // hand ripping glasses off
+      s.frame = A.special[4];
     } else {
       if (!s.beat3) {
         s.beat3 = true;
@@ -403,9 +470,9 @@ function updateRageMode(f, foe, dt) {
         Sparks.ring(f.x, f.y - 80, 120);
         f.camKick = Math.max(f.camKick, 0.4);
       }
-      s.frame = A.special[1]; // unmasked, burning eyes
+      s.frame = A.special[1];
     }
-    f.invulnT = 5.4; // whole apotheosis (~4.2s) is untouchable (paid 3 bars)
+    f.invulnT = 5.4;
     Sparks.ember(f.x + (Math.random() - 0.5) * 60, f.y - Math.random() * 120);
     Sparks.ember(f.x + (Math.random() - 0.5) * 60, f.y - Math.random() * 120);
     s.acc += dt;
@@ -422,7 +489,7 @@ function updateRageMode(f, foe, dt) {
     }
   } else if (s.phase === "strike") {
     if (!s.struckThis) {
-      const contact = resolveStrike(f, foe, rageFrenzyMove(spec));
+      const contact = resolveStrike(f, foe, rageFrenzyMove(spec, s.i));
       if (contact) {
         s.struckThis = true;
         s.struck = true;
@@ -432,11 +499,11 @@ function updateRageMode(f, foe, dt) {
     }
     if (s.t <= 0) {
       if (s.i === 0 && !s.struck) {
-        s.phase = "recover"; // opening whiffed: abort, eat recovery
+        s.phase = "recover";
         s.t = spec.recoverAbort;
-        foe.freezeT = Math.min(foe.freezeT, 0.35); // time resumes on a whiff
+        foe.freezeT = Math.min(foe.freezeT, 0.35);
       } else if (s.i >= spec.frames.length - 1) {
-        s.phase = "rise"; // frenzy done: LEAP for the missile run
+        s.phase = "rise";
         s.t = spec.rise;
         AudioFX.powerup();
         Clones.spawn(f.currentFrame(), f.x, f.y, f.facing, 0.5, "shadow");
@@ -453,9 +520,7 @@ function updateRageMode(f, foe, dt) {
       s.t = spec.strikeTime;
     }
   } else if (s.phase === "rise") {
-    // Explosive LEAP: ease-out vertical launch (fast off the ground,
-    // decelerating into the apex) — a jump, not a float. Takeoff burst
-    // fires once on entry; lateral positioning happens at the top.
+
     if (!s.leapt) {
       s.leapt = true;
       AudioFX.whoosh();
@@ -465,74 +530,73 @@ function updateRageMode(f, foe, dt) {
       f.camKick = Math.max(f.camKick, 0.3);
     }
     const k = 1 - Math.max(0, s.t) / spec.rise;
-    const ease = 1 - Math.pow(1 - k, 3); // cubic ease-out: blast, then hang
+    const ease = 1 - Math.pow(1 - k, 3);
     f.y = GROUND_Y - 280 * ease;
-    s.frame = A.special[5]; // dedicated leap pose, fists down
+    s.frame = A.special[5];
     Sparks.violet(f.x - f.attackDir * 20, f.y - 30);
     f.invulnT = Math.max(f.invulnT, 0.3);
     if (s.t <= 0) {
       s.phase = "aim";
       s.t = spec.aim;
-      s.tx = foe.x; // missile target LOCKED (leave and it misses!)
-      // Leap sideways to the sky above the mark, then SNATCH the incoming
-      // dart: the hand-missile streaks to Wesker's raised hands over `aim`.
+      s.tx = foe.x;
+
       f.x = s.tx;
       clampArena(f);
       f.attackDir = foe.x >= f.x ? 1 : -1;
       f.facing = f.attackDir;
       Sparks.puff(f.x, f.y - 140);
-      Missiles.launch(f.x, f.y - 140, spec.aim);
+      Missiles.hold(f.x + f.attackDir * 14, f.y - 150, { big: true });
       AudioFX.whoosh();
-      s.frame = A.special[6]; // arms spread, reaching for the dart
-      Sparks.ring(s.tx, GROUND_Y - 40, 90); // target-lock marker
+      s.frame = A.special[6];
+      Sparks.ring(s.tx, GROUND_Y - 40, 90);
     }
   } else if (s.phase === "aim") {
-    // Apex hold above the mark while the dart slams into his grip.
+
     f.x = s.tx;
     f.y = GROUND_Y - 280 + Math.sin(s.t * 18) * 6;
     s.frame = A.special[6];
+    Missiles.hold(f.x + f.attackDir * 14, f.y - 150, { big: true });
     Sparks.ember(f.x + (Math.random() - 0.5) * 70, f.y - 40 - Math.random() * 60);
     f.invulnT = Math.max(f.invulnT, 0.3);
     if (s.t <= 0) {
       s.phase = "drop";
       s.t = spec.drop;
-      // CAUGHT: sting + flash as the dart meets his fists, crater missile
-      // synced to the ride down so bloom lands on impact.
+
       AudioFX.grab();
       Sparks.hit(f.x, f.y - 150, 1);
       f.camKick = Math.max(f.camKick, 0.3);
-      Missiles.launch(s.tx, GROUND_Y, spec.drop);
     }
   } else if (s.phase === "drop") {
-    // The ride down: Wesker DRIVES the gripped missile home, accelerating
-    // (ease-in) instead of floating. Dart drawn locked in his fists.
+
     const k = 1 - Math.max(0, s.t) / spec.drop;
-    const ease = k * k; // quadratic ease-in: hang, then slam
+    const ease = k * k;
     f.x = s.tx;
     f.y = GROUND_Y - 280 + 280 * ease;
-    s.frame = A.special[10]; // both fists gripping the dart overhead
-    Missiles.hold(f.x, f.y - 150);
+    s.frame = A.special[10];
+    Missiles.hold(f.x + f.attackDir * 14, f.y - 150, { big: true });
     f.invulnT = Math.max(f.invulnT, 0.3);
     Sparks.ember(f.x, f.y - 60);
     Sparks.violet(f.x - f.attackDir * 16, f.y - 80);
     if (s.t <= 0) {
-      Missiles.clear(); // grip ends where the crater begins
-      // IMPACT on the locked target — boxed, so guards and dodges count.
+      Missiles.clear();
+      // One warhead: the thing he was carrying is the thing that detonates.
+      Missiles.boom(s.tx, GROUND_Y, true);
+      Flash.boom(0.6, 0.9);
+
       f.y = GROUND_Y;
       const box = { x: s.tx - 60, y: GROUND_Y - 140, w: 120, h: 140 };
       const contact = resolveStrike(f, foe, rageMissileMove(spec), box);
-      // Clean: cratered prone. Guarded: huge shove, then the guard breaks.
+
       if (contact && foe.hp > 0) {
         if (contact.type === "hit") foe.knockdown(f.attackDir, spec.missileKnock);
         else foe.crumple = true;
       }
       AudioFX.hit();
-      AudioFX.boom(); // M14.5: the crater gets its own body
+      AudioFX.boom();
       f.camKick = Math.max(f.camKick, 1.0);
       Sparks.puff(s.tx, GROUND_Y - 40);
       Sparks.dust(s.tx, GROUND_Y);
-      // M14.5 bigger crater FX: wide primary shockwave + second higher wave,
-      // twin hit stars, gore only on a clean hit, denser ember column.
+
       Sparks.ring(s.tx, GROUND_Y - 60, 260);
       Sparks.ring(s.tx, GROUND_Y - 110, 170);
       Sparks.hit(s.tx, GROUND_Y - 90, 1);
@@ -549,9 +613,208 @@ function updateRageMode(f, foe, dt) {
   }
 }
 
-// --- Hulk: Gamma Charge / Thunder Clap / Worldbreaker ----------------------
-// Slot mapping lives in fighter.trySpecial (Space/F/O == s1/s2/s3 for every
-// kit); here the ids are Hulk's own: gamma / clap / breaker.
+export function tryIronmanSpecial(f, id, foe) {
+  if (f.kind !== "ironman") return false;
+  const spec = beginSpecial(f, foe, IRONMAN_SPECIALS, id);
+  if (!spec) return false;
+  f.attackDir = f.facing;
+  f.state = "SPECIAL";
+  f.specialId = id;
+  if (id === "burst") {
+    f.special = { phase: "fire", t: spec.volleyTime, i: 0, struckThis: false, acc: 0, frame: null };
+    f.invulnT = Math.max(f.invulnT, 0.5);
+  } else if (id === "unibeam") {
+    f.special = { phase: "startup", t: spec.startup, struckThis: false, acc: 0, frame: null };
+  } else {
+    f.special = { phase: "ascend", t: spec.ascend, i: 0, acc: 0, pending: [], frame: null, airborne: true };
+    f.invulnT = 3.0;
+    AudioFX.powerup();
+  }
+  return true;
+}
+
+function burstMove(spec) {
+  return {
+    damage: spec.damage, hitstun: 0.35, knockback: spec.knockback,
+    hitstop: spec.hitstop, level: "mid", blockstun: spec.blockstun,
+    blockPush: spec.blockPush, chip: spec.chip, heat: true, hit: { w: 0, top: 0, h: 0 },
+  };
+}
+
+function burstRay(f, spec) {
+  const y = f.y - spec.rayTop;
+  const x1 = f.x + f.attackDir * 12;
+  const x2 = f.x + f.attackDir * spec.rayLen;
+  return { x: Math.min(x1, x2), y: y - spec.rayH / 2, w: Math.abs(x2 - x1), h: spec.rayH };
+}
+
+function updateBurst(f, foe, dt) {
+  const spec = IRONMAN_SPECIALS.burst;
+  const s = f.special;
+  s.t -= dt;
+  if (s.phase === "fire") {
+    s.frame = f.sprites.attack[32];
+    f.invulnT = Math.max(f.invulnT, 0.1);
+    if (!s.struckThis) {
+      s.struckThis = true;
+      const ray = burstRay(f, spec);
+      const eyeY = f.y - spec.rayTop;
+
+      Beams.spawn(f.x + f.attackDir * 40, eyeY,
+        Math.max(0, Math.min(arena.width, f.x + f.attackDir * spec.rayLen)), eyeY, 0.12, "#35c8ff");
+      AudioFX.repulsor();
+      const contact = resolveStrike(f, foe, burstMove(spec), ray);
+      if (contact && contact.type === "hit") Sparks.blood(foe.x, eyeY);
+    }
+    if (s.t <= 0) {
+      if (s.i >= spec.volleys - 1) {
+        s.phase = "recover";
+        s.t = spec.recover;
+      } else {
+        s.i += 1;
+        s.phase = "gap";
+        s.t = spec.gapTime;
+      }
+    }
+  } else if (s.phase === "gap") {
+    s.frame = f.sprites.attack[32];
+    if (s.t <= 0) {
+      s.phase = "fire";
+      s.t = spec.volleyTime;
+      s.struckThis = false;
+    }
+  } else {
+    s.frame = f.sprites.idle[0];
+    if (s.t <= 0) endSpecial(f);
+  }
+}
+
+function unibeamMove(spec) {
+  return {
+    damage: spec.damage, hitstun: spec.hitstun, knockback: spec.knockback,
+    hitstop: spec.hitstop, level: spec.level, blockstun: spec.blockstun,
+    blockPush: spec.blockPush, chip: spec.chip, heat: true, hit: { w: 0, top: 0, h: 0 },
+  };
+}
+
+function updateUnibeam(f, foe, dt) {
+  const spec = IRONMAN_SPECIALS.unibeam;
+  const s = f.special;
+  const A = f.sprites;
+  s.t -= dt;
+  if (s.phase === "startup") {
+    s.frame = A.attack[4];
+    if (Math.random() < 0.5) Sparks.ember(f.x + f.attackDir * 10, f.y - 110);
+    if (s.t <= 0) {
+      s.phase = "fire";
+      s.t = spec.fire;
+      s.struckThis = false;
+      const y = f.y - spec.beamTop;
+      const x1 = f.x + f.attackDir * 12;
+      const x2 = Math.max(0, Math.min(arena.width, f.x + f.attackDir * spec.beamLen));
+      Beams.spawn(x1, y, x2, y, spec.fire + 0.02, "#bff4ff");
+      AudioFX.repulsor();
+      AudioFX.zap();
+      f.camKick = Math.max(f.camKick, 0.35);
+    }
+  } else if (s.phase === "fire") {
+    s.frame = A.attack[33];
+    if (!s.flick && s.t < spec.fire / 2) {
+      s.flick = true;
+      const y = f.y - spec.beamTop;
+      const x1 = f.x + f.attackDir * 12;
+      const x2 = Math.max(0, Math.min(arena.width, f.x + f.attackDir * spec.beamLen));
+      Beams.spawn(x1, y, x2, y, spec.fire / 2, "#bff4ff");
+    }
+    if (!s.struckThis) {
+      const y = f.y - spec.beamTop;
+      const x1 = f.x + f.attackDir * 12;
+      const x2 = Math.max(0, Math.min(arena.width, f.x + f.attackDir * spec.beamLen));
+      const ray = { x: Math.min(x1, x2), y: y - spec.beamH / 2, w: Math.abs(x2 - x1), h: spec.beamH };
+      const contact = resolveStrike(f, foe, unibeamMove(spec), ray);
+      if (contact) {
+        s.struckThis = true;
+        if (contact.type === "hit") Sparks.blood(foe.x, y);
+        if (foe.hp > 0) {
+          if (contact.type === "hit") foe.knockdown(f.attackDir, spec.knockback);
+          else foe.crumple = true;
+        }
+      }
+    }
+    if (s.t <= 0) {
+      s.phase = "recover";
+      s.t = spec.recover;
+    }
+  } else {
+    s.frame = A.idle[0];
+    if (s.t <= 0) endSpecial(f);
+  }
+}
+
+function updateShelling(f, foe, dt) {
+  const spec = IRONMAN_SPECIALS.shelling;
+  const s = f.special;
+  const A = f.sprites;
+  s.t -= dt;
+  if (s.phase === "ascend") {
+
+    const k = 1 - Math.max(0, s.t) / spec.ascend;
+    f.y = GROUND_Y - 220 * k;
+    s.frame = A.attack[34];
+    f.invulnT = Math.max(f.invulnT, 0.3);
+    Sparks.ember(f.x, f.y - 20);
+    if (s.t <= 0) {
+      s.phase = "rain";
+      s.t = spec.volleyGap;
+      s.i = 0;
+      s.acc = 0;
+    }
+  } else if (s.phase === "rain") {
+
+    f.y = GROUND_Y - 220 + Math.sin(s.t * 14) * 6;
+    s.frame = A.attack[32];
+    f.invulnT = Math.max(f.invulnT, 0.3);
+    Sparks.ember(f.x + (Math.random() - 0.5) * 40, f.y - 20);
+
+    for (const m of s.pending) m.t += dt;
+    for (const m of s.pending) {
+      if (!m.done && m.t >= spec.fallTime) {
+        m.done = true;
+        const box = { x: m.tx - 55, y: GROUND_Y - 150, w: 110, h: 150 };
+        const contact = resolveStrike(f, foe,
+          { damage: spec.volleyDmg, hitstun: 0.5, knockback: 400, hitstop: 0.08, level: "mid", blockstun: 0.35, blockPush: 450, chip: spec.volleyChip, heat: true, sky: true, hit: { w: 0, top: 0, h: 0 } }, box);
+        if (contact && foe.hp > 0) {
+          if (contact.type === "hit") Sparks.blood(m.tx, GROUND_Y - 80);
+          else foe.crumple = true;
+        }
+        AudioFX.boom();
+        f.camKick = Math.max(f.camKick, 0.5);
+        Sparks.ring(m.tx, GROUND_Y - 60, 170);
+        Sparks.dust(m.tx, GROUND_Y);
+      }
+    }
+    s.acc += dt;
+    if (s.i < spec.volleys && s.acc >= spec.volleyGap) {
+      s.acc = 0;
+      const tx = foe.x;
+      s.pending.push({ tx, t: 0, done: false });
+      Missiles.launch(tx, GROUND_Y, spec.fallTime);
+      Sparks.ring(tx, GROUND_Y - 40, 90);
+      AudioFX.whoosh();
+      s.i += 1;
+    }
+    if (s.i >= spec.volleys && s.pending.every((m) => m.done)) {
+      s.phase = "recover";
+      s.t = spec.recover;
+    }
+  } else {
+
+    f.y += (GROUND_Y - f.y) * Math.min(1, dt * 6);
+    s.frame = A.idle[0];
+    if (s.t <= 0) endSpecial(f);
+  }
+}
+
 export function tryHulkSpecial(f, id, foe) {
   if (f.kind !== "hulk") return false;
   if (id === "breaker" && (!foe.grounded || foe.hp <= 0)) return false;
@@ -564,7 +827,7 @@ export function tryHulkSpecial(f, id, foe) {
   const t0 = id === "gamma" ? spec.startup : id === "clap" ? spec.startup : spec.ascend;
   f.special = { phase: first, t: t0, i: 0, struck: false, struckThis: false, acc: 0, tickAcc: 0, tickN: 0, frame: null };
   if (id === "breaker") {
-    // Cinematic seize: an unblockable 3-bar grab, hoisted overhead.
+
     foe.freezeT = spec.ascend + spec.shake + 0.12 + spec.recover + 0.15;
     Hitstop.t = Math.max(Hitstop.t, 0.2);
     Sparks.ring(foe.x, foe.y - 80, 130);
@@ -591,7 +854,7 @@ function updateGamma(f, foe, dt) {
   const A = f.sprites;
   s.t -= dt;
   if (s.phase === "startup") {
-    s.frame = A.attack[4]; // pawing the ground (hittable — stuff it here)
+    s.frame = A.attack[4];
     if (Math.random() < 0.4) Sparks.dust(f.x, GROUND_Y);
     if (s.t <= 0) {
       s.phase = "dash";
@@ -599,7 +862,7 @@ function updateGamma(f, foe, dt) {
       s.struckThis = false;
       s.distLeft = spec.dashSpeed * spec.dashTime;
       s.acc = 0;
-      f.invulnT = spec.dashTime + 0.05; // untouchable once driving
+      f.invulnT = spec.dashTime + 0.05;
       AudioFX.whoosh();
       Sparks.dust(f.x, GROUND_Y);
       Clones.spawn(f.currentFrame(), f.x, f.y, f.facing, 0.3);
@@ -653,7 +916,7 @@ function updateClap(f, foe, dt) {
   const A = f.sprites;
   s.t -= dt;
   if (s.phase === "startup") {
-    s.frame = A.special[8]; // chest swelled, arms wide (interrupt me here)
+    s.frame = A.special[8];
     if (s.t <= 0) {
       s.phase = "active";
       s.t = spec.active;
@@ -666,7 +929,7 @@ function updateClap(f, foe, dt) {
       f.camKick = Math.max(f.camKick, 0.6);
     }
   } else if (s.phase === "active") {
-    s.frame = A.special[3]; // palms together, shockwave out
+    s.frame = A.special[3];
     if (!s.rang && s.t < spec.active / 2) {
       s.rang = true;
       Sparks.ring(f.x, f.y - 80, Math.round(spec.radius * 0.7));
@@ -701,11 +964,11 @@ function updateBreaker(f, foe, dt) {
   const A = f.sprites;
   s.t -= dt;
   if (s.phase === "ascend") {
-    // Hoist the victim overhead (grounded — no flight, just leverage).
+
     const k = 1 - Math.max(0, s.t) / spec.ascend;
     foe.x = f.x + f.attackDir * 55;
     foe.y = GROUND_Y - 150 * k;
-    s.frame = A.special[9]; // arms straight up, victim overhead
+    s.frame = A.special[9];
     f.invulnT = Math.max(f.invulnT, 0.3);
     foe.holdT = Math.max(foe.holdT, 0.5);
     Sparks.dust(f.x, GROUND_Y);
@@ -716,10 +979,10 @@ function updateBreaker(f, foe, dt) {
       AudioFX.roar();
     }
   } else if (s.phase === "shake") {
-    // Rag-doll shakes: three 5-damage ticks straight into the held victim.
+
     foe.x = f.x + f.attackDir * 55;
     foe.y = GROUND_Y - 150 + Math.sin(s.t * 30) * 8;
-    s.frame = f.sprites.attack[27]; // quake effort, victim overhead
+    s.frame = f.sprites.attack[27];
     f.invulnT = Math.max(f.invulnT, 0.3);
     foe.holdT = Math.max(foe.holdT, 0.5);
     const elapsed = spec.shake - Math.max(0, s.t);
@@ -727,7 +990,7 @@ function updateBreaker(f, foe, dt) {
       AudioFX.hit();
       f.camKick = Math.max(f.camKick, 0.2);
       if (foe.hp > 0) {
-        foe.hp = Math.max(0, foe.hp - spec.tick);
+        foe.hp = Math.max(0, foe.hp - spec.tick * vulnMult(foe, false));
         Sparks.blood(foe.x, foe.y - 100);
         Sparks.hit(foe.x, foe.y - 100, f.attackDir);
         if (foe.hp <= 0) foe.state = "KO";
@@ -741,7 +1004,7 @@ function updateBreaker(f, foe, dt) {
       s.struckThis = false;
     }
   } else if (s.phase === "slam") {
-    s.frame = f.sprites.attack[27]; // both fists drive the victim down
+    s.frame = f.sprites.attack[27];
     if (!s.struckThis) {
       s.struckThis = true;
       const dir = foe.x >= f.x ? 1 : -1;
@@ -760,15 +1023,13 @@ function updateBreaker(f, foe, dt) {
       s.t = spec.recover;
     }
   } else {
-    // Settle: release the hold if it somehow survived, stand down.
+
     if (foe.heldBy === f) { foe.heldBy = null; if (foe.hp > 0) foe.state = "IDLE"; }
     s.frame = A.idle[0];
     if (s.t <= 0) endSpecial(f);
   }
 }
-// --- Homelander: Quick Laser / Sonic Scream / Rage Mode ---------------------
-// Slot mapping lives in fighter.trySpecial (Space/F/O == s1/s2/s3 for both
-// kits); here the ids are Homelander's own: laser / scream / ragemode.
+
 export function tryHomelanderSpecial(f, id, foe) {
   if (f.kind !== "homelander") return false;
   if (id === "ragemode" && (!foe.grounded || foe.hp <= 0)) return false;
@@ -781,8 +1042,7 @@ export function tryHomelanderSpecial(f, id, foe) {
   const t0 = id === "laser" ? spec.startup : id === "scream" ? spec.startup : spec.ascend;
   f.special = { phase: first, t: t0, i: 0, struck: false, struckThis: false, acc: 0, tickAcc: 0, tickN: 0, frame: null };
   if (id === "ragemode") {
-    // Cinematic seize: an unblockable 3-bar grab — the victim is flown.
-    // Time-stop belt-and-braces: pinned for ascend+carry+lase+slam+recover.
+
     foe.freezeT = spec.ascend + spec.carry + spec.lase + 0.12 + spec.recover + 0.15;
     Hitstop.t = Math.max(Hitstop.t, 0.2);
     Sparks.ring(foe.x, foe.y - 80, 110);
@@ -800,7 +1060,7 @@ function laserMove(spec) {
   return {
     damage: spec.damage, hitstun: spec.hitstun, knockback: spec.knockback,
     hitstop: spec.hitstop, level: spec.level, blockstun: spec.blockstun,
-    blockPush: spec.blockPush, chip: spec.chip, hit: { w: 0, top: 0, h: 0 },
+    blockPush: spec.blockPush, chip: spec.chip, heat: true, hit: { w: 0, top: 0, h: 0 },
   };
 }
 
@@ -810,7 +1070,7 @@ function updateLaser(f, foe, dt) {
   const A = f.sprites;
   s.t -= dt;
   if (s.phase === "startup") {
-    s.frame = A.special[7]; // head ducked, eyes kindling (vulnerable — stuff it)
+    s.frame = A.special[7];
     if (Math.random() < 0.5) Sparks.ember(f.x + f.attackDir * 10, f.y - 130);
     if (s.t <= 0) {
       s.phase = "fire";
@@ -824,8 +1084,8 @@ function updateLaser(f, foe, dt) {
       f.camKick = Math.max(f.camKick, 0.2);
     }
   } else if (s.phase === "fire") {
-    s.frame = A.special[2]; // head thrust forward, full burn
-    // Beam shimmer: mid-fire flicker re-spawn so the ray crackles.
+    s.frame = A.special[2];
+
     if (!s.flick && s.t < spec.fire / 2) {
       s.flick = true;
       const eyeY = f.y - 130;
@@ -834,7 +1094,7 @@ function updateLaser(f, foe, dt) {
       Beams.spawn(x1, eyeY, x2, eyeY, spec.fire / 2);
     }
     if (!s.struckThis) {
-      // Hitscan ray at head height: thin + high, so crouchers duck under it.
+
       const eyeY = f.y - 130;
       const x1 = f.x + f.attackDir * 12;
       const x2 = Math.max(0, Math.min(arena.width, f.x + f.attackDir * spec.beamLen));
@@ -843,8 +1103,7 @@ function updateLaser(f, foe, dt) {
       if (contact) {
         s.struckThis = true;
         if (contact.type === "hit") Sparks.blood(foe.x, eyeY);
-        // Clean burn drops the victim prone; a guarded burn shoves, then
-        // breaks the guard into the same fall.
+
         if (foe.hp > 0) {
           if (contact.type === "hit") foe.knockdown(f.attackDir, spec.knockback);
           else foe.crumple = true;
@@ -875,7 +1134,7 @@ function updateScream(f, foe, dt) {
   const A = f.sprites;
   s.t -= dt;
   if (s.phase === "startup") {
-    s.frame = A.special[8]; // chest swelling, breath drawn (interrupt me here)
+    s.frame = A.special[8];
     if (s.t <= 0) {
       s.phase = "active";
       s.t = spec.active;
@@ -887,16 +1146,14 @@ function updateScream(f, foe, dt) {
       f.camKick = Math.max(f.camKick, 0.5);
     }
   } else if (s.phase === "active") {
-    s.frame = A.special[3]; // jaw wide, shockwave out
-    // Second ring pulse mid-blast so the scream visibly expands in waves.
+    s.frame = A.special[3];
+
     if (!s.rang && s.t < spec.active / 2) {
       s.rang = true;
       Sparks.ring(f.x, f.y - 80, Math.round(spec.radius * 0.7));
     }
     if (!s.struckThis) {
-      // Omnidirectional burst: shove direction is AWAY from Homelander,
-      // so attackDir tracks this hit (facing stays put — the scream has
-      // no "front").
+
       const dir = foe.x >= f.x ? 1 : -1;
       f.attackDir = foe.x === f.x ? f.attackDir : dir;
       const zone = { x: f.x - spec.radius, y: f.y - spec.top, w: spec.radius * 2, h: spec.top };
@@ -904,8 +1161,7 @@ function updateScream(f, foe, dt) {
       if (contact) {
         s.struckThis = true;
         Sparks.ring(f.x, f.y - 80, spec.radius * 0.6);
-        // Hurled off their feet: clean hits drop prone; guarded shoves break
-        // the guard into the same fall once the push ends.
+
         if (foe.hp > 0) {
           if (contact.type === "hit") foe.knockdown(f.attackDir, spec.knockback);
           else foe.crumple = true;
@@ -928,12 +1184,12 @@ function updateHRage(f, foe, dt) {
   const A = f.sprites;
   s.t -= dt;
   if (s.phase === "ascend") {
-    // Rise with the victim dangling in front (shadow stays grounded).
+
     const k = 1 - Math.max(0, s.t) / spec.ascend;
     f.y = GROUND_Y - 110 * k;
     foe.x = f.x + f.attackDir * 50;
     foe.y = f.y - 10;
-    s.frame = A.special[9]; // cape flared, eyes ignited on the way up
+    s.frame = A.special[9];
     Sparks.ember(f.x - f.attackDir * 20, f.y - 100);
     f.invulnT = Math.max(f.invulnT, 0.3);
     foe.holdT = Math.max(foe.holdT, 0.5);
@@ -943,7 +1199,7 @@ function updateHRage(f, foe, dt) {
       AudioFX.powerup();
     }
   } else if (s.phase === "carry") {
-    // Hover, bobbing, while the beam charges.
+
     f.y = GROUND_Y - 110 + Math.sin(s.t * 20) * 5;
     foe.x = f.x + f.attackDir * 50;
     foe.y = f.y - 10;
@@ -958,14 +1214,13 @@ function updateHRage(f, foe, dt) {
       s.tickN = 0;
     }
   } else if (s.phase === "lase") {
-    // Flickering beam + bleeding ticks straight into the held victim.
+
     foe.x = f.x + f.attackDir * 50;
     foe.y = f.y - 10;
     s.frame = A.special[2];
     f.invulnT = Math.max(f.invulnT, 0.3);
     foe.holdT = Math.max(foe.holdT, 0.5);
-    // Tick schedule on phase-elapsed time (not an accumulator): all four
-    // ticks land inside the window even with frame quantization.
+
     const elapsed = spec.lase - Math.max(0, s.t);
     if (s.tickN < spec.ticks && elapsed + 1e-9 >= (s.tickN + 1) * (spec.lase / spec.ticks)) {
       const eyeY = f.y - 130;
@@ -973,9 +1228,9 @@ function updateHRage(f, foe, dt) {
       AudioFX.zap();
       f.camKick = Math.max(f.camKick, 0.15);
       if (foe.hp > 0) {
-        foe.hp = Math.max(0, foe.hp - spec.tick);
+        foe.hp = Math.max(0, foe.hp - spec.tick * vulnMult(foe, true));
         Sparks.blood(foe.x, foe.y - 100);
-        Sparks.hit(foe.x, foe.y - 100, f.attackDir); // each tick flashes
+        Sparks.hit(foe.x, foe.y - 100, f.attackDir);
         if (foe.hp <= 0) foe.state = "KO";
         else Hitstop.t = Math.max(Hitstop.t, 0.03);
       }
@@ -987,12 +1242,12 @@ function updateHRage(f, foe, dt) {
       s.struckThis = false;
     }
   } else if (s.phase === "slam") {
-    s.frame = A.special[3]; // hurl-down with the whole body
+    s.frame = A.special[3];
     if (!s.struckThis) {
       s.struckThis = true;
       const dir = foe.x >= f.x ? 1 : -1;
       foe.takeHit({ damage: spec.finale, hitstun: 0.7, knockback: 300 }, dir);
-      if (foe.hp > 0) foe.knockdown(dir, 300, 0, spec.launchDown); // crater slam
+      if (foe.hp > 0) foe.knockdown(dir, 300, 0, spec.launchDown);
       AudioFX.hit();
       f.camKick = Math.max(f.camKick, 0.8);
       Sparks.puff(foe.x, GROUND_Y - 20);
@@ -1004,18 +1259,17 @@ function updateHRage(f, foe, dt) {
       s.t = spec.recover;
     }
   } else {
-    // Settle back to the ground as the mode ends.
+
     f.y += (GROUND_Y - f.y) * Math.min(1, dt * 6);
     s.frame = A.idle[0];
     if (s.t <= 0) endSpecial(f);
   }
 }
 
-// --- Wolverine: Adamantium Rush / Berserker Barrage / Weapon X Surge -------
 export function tryWolverineSpecial(f, id, foe) {
   if (f.kind !== "wolverine") return false;
   if (id === "ragemode" && (!foe.grounded || foe.hp <= 0)) {
-    // Pounce needs a grounded, living victim (same gate as H-rage).
+
   } else if (id !== "ragemode" && id !== "rush" && id !== "barrage") return false;
   const spec = beginSpecial(f, foe, WOLVERINE_SPECIALS, id);
   if (!spec) return false;
@@ -1055,7 +1309,7 @@ function updateRush(f, foe, dt) {
       s.phase = "dash"; s.t = spec.dashTime; s.struckThis = false;
       s.distLeft = spec.dashSpeed * spec.dashTime; s.acc = 0;
       f.invulnT = spec.dashTime + 0.05;
-      f.rushLowT = spec.dashTime + 0.05; // ducks highs/laser mid-drive
+      f.rushLowT = spec.dashTime + 0.05;
       AudioFX.whoosh(); AudioFX.snikt();
       Sparks.puff(f.x, f.y - 60);
       Clones.spawn(f.currentFrame(), f.x, f.y, f.facing, 0.3);
@@ -1101,7 +1355,7 @@ function updateBarrage(f, foe, dt) {
     f.invulnT = 1.6;
     if (s.t <= 0) {
       s.i = 0;
-      f.x = foe.x - (foe.x >= f.x ? 1 : -1) * -58; // step to foe side
+      f.x = foe.x - (foe.x >= f.x ? 1 : -1) * -58;
       f.attackDir = foe.x >= f.x ? 1 : -1; f.facing = f.attackDir;
       f.special.frame = f.sprites.attack[spec.frames[0]];
       s.phase = "strike"; s.t = spec.strikeTime; s.struckThis = false;
@@ -1167,7 +1421,7 @@ function updateXRage(f, foe, dt) {
     f.invulnT = 4.5;
     Sparks.ember(f.x + (Math.random() - 0.5) * 60, f.y - Math.random() * 120);
     if (s.t <= 0) {
-      f.hp = Math.min(f.maxHp, f.hp + spec.heal); // burst heal
+      f.hp = Math.min(f.maxHp, f.hp + spec.heal);
       s.i = 0; xBlink(f, foe, 0);
       s.phase = "strike"; s.t = spec.strikeTime;
       AudioFX.snikt();
@@ -1202,7 +1456,7 @@ function updateXRage(f, foe, dt) {
     const step = 0.5 / spec.shredTicks;
     if (s.tickN < spec.shredTicks && s.tickAcc >= (s.tickN + 1) * step) {
       if (foe.hp > 0) {
-        foe.hp = Math.max(0, foe.hp - spec.shred);
+        foe.hp = Math.max(0, foe.hp - spec.shred * vulnMult(foe, false));
         foe.sinceDamageT = 0;
         if (typeof foe.applyBleed === "function") foe.applyBleed(3);
         Sparks.blood(foe.x, foe.y - 100);
@@ -1233,3 +1487,1257 @@ function updateXRage(f, foe, dt) {
     if (s.t <= 0) { s.phase = "recover"; s.t = spec.recover; }
   } else { s.frame = A.idle[0]; if (s.t <= 0) endSpecial(f); }
 }
+
+
+export function tryThorSpecial(f, id, foe) {
+  if (f.kind !== "thor") return false;
+  const spec = beginSpecial(f, foe, THOR_SPECIALS, id);
+  if (!spec) return false;
+  f.attackDir = f.facing;
+  f.state = "SPECIAL";
+  f.specialId = id;
+  f.special = { phase: "startup", t: spec.startup, struckThis: false, acc: 0, frame: null, rang: false };
+  if (id === "godblast") {
+    f.invulnT = 5.5;
+    AudioFX.powerup();
+  }
+  return true;
+}
+
+function stormMove(spec) {
+  return {
+    damage: spec.damage, hitstun: spec.hitstun, knockback: spec.knockback,
+    hitstop: spec.hitstop, level: spec.level, blockstun: spec.blockstun,
+    blockPush: spec.blockPush, chip: spec.chip, hit: { w: 0, top: 0, h: 0 },
+  };
+}
+
+function updateStorm(f, foe, dt) {
+  const spec = THOR_SPECIALS.storm;
+  const s = f.special;
+  s.t -= dt;
+  if (s.phase === "startup") {
+    s.frame = f.sprites.attack[40];
+    if (Math.random() < 0.5) Sparks.ember(f.x + f.attackDir * 10, f.y - 130);
+    if (s.t <= 0) {
+      s.phase = "out";
+      s.t = spec.outTime;
+      s.hx = f.x + f.attackDir * 20;
+      s.struckOut = false;
+      s.struckBack = false;
+      AudioFX.whoosh();
+      AudioFX.thunder();
+      f.invulnT = Math.max(f.invulnT, spec.outTime + spec.backTime + 0.1);
+    }
+  } else if (s.phase === "out" || s.phase === "back") {
+    s.frame = f.sprites.attack[39];
+    const returning = s.phase === "back";
+    const spd = returning ? spec.backSpeed : spec.speed;
+    s.hx += (returning ? -f.attackDir : f.attackDir) * spd * dt;
+    s.hx = Math.max(0, Math.min(arena.width, s.hx));
+    FlyingHammer.show(s.hx, f.y - spec.box.top, f.attackDir);
+    if (Math.random() < 0.6) Sparks.violet(s.hx, f.y - spec.box.top);
+    const flag = returning ? "struckBack" : "struckOut";
+    if (!s[flag]) {
+      const box = {
+        x: s.hx - spec.box.w / 2,
+        y: f.y - spec.box.top - spec.box.h / 2,
+        w: spec.box.w, h: spec.box.h,
+      };
+      const contact = resolveStrike(f, foe, stormMove(spec), box);
+      if (contact) {
+        s[flag] = true;
+        f.camKick = Math.max(f.camKick, 0.25);
+        if (contact.type === "hit") Sparks.blood(foe.x, f.y - spec.box.top);
+        if (foe.hp > 0) {
+          if (contact.type === "hit") foe.knockdown(f.attackDir, spec.knockback);
+          else foe.crumple = true;
+        }
+      }
+    }
+    if (!returning && s.t <= 0) {
+      s.phase = "back";
+      s.t = spec.backTime;
+    } else if (returning) {
+      const caught = (f.attackDir === 1 && s.hx <= f.x) ||
+        (f.attackDir === -1 && s.hx >= f.x) || s.t <= 0;
+      if (caught) {
+        FlyingHammer.hide();
+        s.phase = "recover";
+        s.t = spec.recover;
+      }
+    }
+  } else {
+    FlyingHammer.hide();
+    s.frame = f.sprites.idle[0];
+    if (s.t <= 0) endSpecial(f);
+  }
+}
+
+function updateLightning(f, foe, dt) {
+  const spec = THOR_SPECIALS.lightning;
+  const s = f.special;
+  s.t -= dt;
+  if (s.phase === "startup") {
+    s.frame = f.sprites.attack[40];
+    if (Math.random() < 0.5) Sparks.ember(f.x, f.y - 160);
+    if (s.t <= 0) {
+      s.phase = "active"; s.t = spec.active; s.struckThis = false; s.rang = false;
+      AudioFX.thunder();
+      AudioFX.boom();
+      Sparks.ring(f.x, f.y - 80, spec.radius);
+      Sparks.dust(f.x, GROUND_Y);
+      f.camKick = Math.max(f.camKick, 0.55);
+    }
+  } else if (s.phase === "active") {
+    s.frame = f.sprites.attack[41];
+    if (!s.rang && s.t < spec.active / 2) {
+      s.rang = true;
+      Sparks.ring(f.x, f.y - 80, Math.round(spec.radius * 0.7));
+    }
+    if (!s.struckThis) {
+      const dir = foe.x >= f.x ? 1 : -1;
+      f.attackDir = foe.x === f.x ? f.attackDir : dir;
+      const zone = { x: f.x - spec.radius, y: f.y - spec.top, w: spec.radius * 2, h: spec.top };
+      const contact = resolveStrike(f, foe,
+        { damage: spec.damage, hitstun: spec.hitstun, knockback: spec.knockback, hitstop: spec.hitstop, level: spec.level, blockstun: spec.blockstun, blockPush: spec.blockPush, chip: spec.chip, heat: true, hit: { w: 0, top: 0, h: 0 } }, zone);
+      if (contact) {
+        s.struckThis = true;
+        Sparks.ring(f.x, f.y - 80, spec.radius * 0.6);
+        if (foe.hp > 0) {
+          if (contact.type === "hit") foe.knockdown(f.attackDir, spec.knockback);
+          else foe.crumple = true;
+        }
+      }
+    }
+    if (s.t <= 0) { s.phase = "recover"; s.t = spec.recover; }
+  } else { s.frame = f.sprites.idle[0]; if (s.t <= 0) endSpecial(f); }
+}
+
+function godblastTick(spec) {
+  return {
+    damage: spec.tickDmg, hitstun: spec.tickStun, knockback: spec.tickKnock,
+    hitstop: spec.tickStop, level: "mid", blockstun: spec.tickBlockstun,
+    blockPush: spec.tickPush, chip: spec.tickChip, heat: true, hit: { w: 0, top: 0, h: 0 },
+  };
+}
+
+function updateGodblast(f, foe, dt) {
+  const spec = THOR_SPECIALS.godblast;
+  const s = f.special;
+  s.t -= dt;
+  if (s.phase === "startup") {
+    s.frame = f.sprites.attack[40];
+    f.invulnT = Math.max(f.invulnT, 0.3);
+    if (Math.random() < 0.6) Sparks.ember(f.x + (Math.random() - 0.5) * 60, f.y - 120);
+    if (s.t <= 0) {
+      s.phase = "slam";
+      s.t = spec.slamTime;
+      s.tx = foe.x;
+      AudioFX.boom();
+      Sparks.ring(f.x, GROUND_Y - 40, 160);
+      Sparks.dust(f.x, GROUND_Y);
+      f.camKick = Math.max(f.camKick, 0.5);
+    }
+  } else if (s.phase === "slam") {
+    s.frame = f.sprites.attack[38];
+    if (s.t <= 0) {
+      s.phase = "barrage";
+      s.t = spec.barrageTime;
+      s.tickN = 0;
+    }
+  } else if (s.phase === "barrage") {
+    s.frame = f.sprites.attack[43];
+    f.invulnT = Math.max(f.invulnT, 0.3);
+    const elapsed = spec.barrageTime - Math.max(0, s.t);
+    if (s.tickN < spec.ticks && elapsed + 1e-9 >= (s.tickN + 1) * (spec.barrageTime / spec.ticks)) {
+      const bx = s.tx + (Math.random() - 0.5) * 80;
+      Bolts.strike(bx, GROUND_Y, 0);
+      AudioFX.thunder();
+      f.camKick = Math.max(f.camKick, 0.25);
+      const zone = { x: bx - 60, y: GROUND_Y - spec.top, w: 120, h: spec.top };
+      const contact = resolveStrike(f, foe, godblastTick(spec), zone);
+      if (contact && contact.type === "hit") Sparks.blood(foe.x, GROUND_Y - 100);
+      s.tickN += 1;
+    }
+    if (Math.random() < 0.4) Sparks.ember(f.x + (Math.random() - 0.5) * 120, GROUND_Y - Math.random() * 140);
+    if (s.t <= 0) {
+      s.phase = "recover";
+      s.t = spec.recover;
+    }
+  } else {
+    s.frame = f.sprites.idle[0];
+    if (s.t <= 0) endSpecial(f);
+  }
+}
+
+export function tryUroborosSpecial(f, id, foe) {
+  if (f.kind !== "uroboros") return false;
+  if ((id === "wrap" || id === "impale") && (!foe.grounded || foe.hp <= 0)) return false;
+  const spec = beginSpecial(f, foe, UROBOROS_SPECIALS, id);
+  if (!spec) return false;
+  f.attackDir = f.facing;
+  f.state = "SPECIAL";
+  f.specialId = id;
+  f.special = { phase: "startup", t: spec.startup, struckThis: false, acc: 0, tickN: 0, tickAcc: 0, frame: null };
+  if (id === "impale") {
+    f.invulnT = 3.0;
+    foe.freezeT = spec.startup + (spec.pullTime ?? 0.35) + spec.pierceTime +
+      (spec.slamTime ?? 0.15) + spec.recover + 0.15;
+    Hitstop.t = Math.max(Hitstop.t, 0.2);
+    Sparks.ring(foe.x, foe.y - 80, 110);
+    AudioFX.powerup();
+  }
+  return true;
+}
+
+function updateWrap(f, foe, dt) {
+  const spec = UROBOROS_SPECIALS.wrap;
+  const s = f.special;
+  const A = f.sprites;
+  s.t -= dt;
+  if (s.phase === "startup") {
+    s.frame = A.attack[48];
+    f.x += f.attackDir * (spec.lunge / spec.startup) * dt;
+    clampArena(f);
+    if (s.t <= 0) {
+      const dx = foe.x - f.x;
+      if (foe.hp > 0 && foe.grounded && foe.invulnT <= 0 &&
+        Math.abs(dx) <= spec.range && (dx === 0 || Math.sign(dx) === f.attackDir)) {
+        s.phase = "carry";
+        s.t = spec.carry;
+        foe.takeGrabbed(f);
+        foe.holdT = spec.carry + spec.raise + 0.5;
+        foe.x = f.x + f.attackDir * 55;
+        AudioFX.squelch();
+      } else {
+        s.phase = "recover";
+        s.t = spec.recover;
+        AudioFX.whiff();
+      }
+    }
+  } else if (s.phase === "carry") {
+    s.frame = A.attack[48];
+    foe.x = f.x + f.attackDir * 55;
+    foe.holdT = Math.max(foe.holdT, 0.5);
+    f.invulnT = Math.max(f.invulnT, 0.2);
+    if (s.t <= 0) {
+      s.phase = "raise";
+      s.t = spec.raise;
+      AudioFX.whoosh();
+    }
+  } else if (s.phase === "raise") {
+    s.frame = A.attack[49];
+    const k = 1 - Math.max(0, s.t) / spec.raise;
+    foe.x = f.x + f.attackDir * 55;
+    foe.y = GROUND_Y - 150 * k;
+    foe.holdT = Math.max(foe.holdT, 0.4);
+    f.invulnT = Math.max(f.invulnT, 0.2);
+    if (s.t <= 0) {
+      s.phase = "toss";
+      s.t = spec.tossTime;
+      s.struckThis = false;
+    }
+  } else if (s.phase === "toss") {
+    s.frame = A.attack[47];
+    if (!s.struckThis) {
+      s.struckThis = true;
+      if (foe.heldBy === f) { foe.heldBy = null; foe.state = "IDLE"; }
+      foe.takeHit(
+        { damage: spec.damage, hitstun: spec.hitstun, knockback: spec.knockback },
+        f.attackDir
+      );
+      if (foe.hp > 0) foe.knockdown(f.attackDir, spec.knockback, 320);
+      AudioFX.hit();
+      AudioFX.boom();
+      f.camKick = Math.max(f.camKick, 0.7);
+      Sparks.ring(foe.x, GROUND_Y - 60, 170);
+      Sparks.dust(foe.x, GROUND_Y);
+      Sparks.blood(foe.x, GROUND_Y - 80);
+    }
+    if (s.t <= 0) {
+      s.phase = "recover";
+      s.t = spec.recover;
+    }
+  } else {
+    if (foe.heldBy === f) { foe.heldBy = null; if (foe.hp > 0) foe.state = "IDLE"; }
+    s.frame = A.idle[0];
+    if (s.t <= 0) endSpecial(f);
+  }
+}
+
+function updateRock(f, foe, dt) {
+  const spec = UROBOROS_SPECIALS.rock;
+  const s = f.special;
+  const A = f.sprites;
+  s.t -= dt;
+  if (s.phase === "startup") {
+    s.frame = A.attack[49];
+    if (Math.random() < 0.4) Sparks.dust(f.x, GROUND_Y);
+    if (s.t <= 0) {
+      s.phase = "slam";
+      s.t = spec.slamTime;
+      s.struckThis = false;
+      AudioFX.roar();
+    }
+  } else if (s.phase === "slam") {
+    s.frame = A.attack[47];
+    if (!s.struckThis) {
+      s.struckThis = true;
+      const zx = f.x + f.attackDir * (spec.zone.reach + spec.zone.w / 2 - 40);
+      const zone = { x: zx - spec.zone.w / 2, y: GROUND_Y - spec.zone.h, w: spec.zone.w, h: spec.zone.h };
+      const contact = resolveStrike(f, foe,
+        { damage: spec.damage, hitstun: spec.hitstun, knockback: spec.knockback, hitstop: spec.hitstop, level: spec.level, blockstun: spec.blockstun, blockPush: spec.blockPush, chip: spec.chip, hit: { w: 0, top: 0, h: 0 } }, zone);
+      AudioFX.boom();
+      f.camKick = Math.max(f.camKick, 0.7);
+      Sparks.ring(zx, GROUND_Y - 60, 190);
+      Sparks.dust(zx, GROUND_Y);
+      Sparks.puff(zx, GROUND_Y - 40);
+      if (contact) {
+        if (contact.type === "hit") Sparks.blood(foe.x, GROUND_Y - 90);
+        if (foe.hp > 0) {
+          if (contact.type === "hit") foe.knockdown(f.attackDir, spec.knockback);
+          else foe.crumple = true;
+        }
+      }
+    }
+    if (s.t <= 0) {
+      s.phase = "recover";
+      s.t = spec.recover;
+    }
+  } else {
+    s.frame = A.idle[0];
+    if (s.t <= 0) endSpecial(f);
+  }
+}
+
+function updateImpale(f, foe, dt) {
+  const spec = UROBOROS_SPECIALS.impale;
+  const s = f.special;
+  const A = f.sprites;
+  s.t -= dt;
+  const enterPierce = () => {
+    s.phase = "pierce";
+    s.t = spec.pierceTime;
+    s.tickN = 0;
+    s.tickAcc = 0;
+    s.struckThis = false;
+    foe.takeGrabbed(f);
+    foe.holdT = spec.pierceTime + (spec.slamTime ?? 0.15) + 0.6;
+    foe.x = f.x + f.attackDir * 70;
+    foe.y = GROUND_Y;
+    AudioFX.squelch();
+    Sparks.ring(foe.x, foe.y - 100, 140);
+    f.camKick = Math.max(f.camKick, 0.4);
+  };
+  if (s.phase === "startup") {
+    s.frame = A.attack[48];
+    // PLANTED BRUTALITY: no dash — Wesker braces, ground cracks, tentacle erupts under foe.
+    if (!s.roared) {
+      s.roared = true;
+      AudioFX.roar();
+      Sparks.ring(f.x, f.y - 80, 200);
+      Sparks.dust(f.x, GROUND_Y);
+      f.camKick = Math.max(f.camKick, 0.5);
+      Hitstop.t = Math.max(Hitstop.t, 0.12);
+    }
+    f.invulnT = Math.max(f.invulnT, 0.3);
+    // tremor: shake in place around anchor instead of running forward
+    if (s.sx === undefined) s.sx = f.x;
+    f.x = s.sx + Math.sin((spec.startup - s.t) * 55) * 4;
+    clampArena(f);
+    Sparks.dust(f.x, GROUND_Y);
+    if (Math.random() < 0.7) Sparks.ember(f.x + (Math.random() - 0.5) * 90, f.y - 40 - Math.random() * 100);
+    s.acc += dt;
+    if (s.acc >= 0.18) {
+      s.acc = 0;
+      Sparks.ring(f.x, f.y - 80, 150);
+      Sparks.ring(foe.x, GROUND_Y - 30, 90);
+      f.camKick = Math.max(f.camKick, 0.3);
+    }
+    if (s.t <= 0) {
+      const dx = foe.x - f.x;
+      const adx = Math.abs(dx);
+      const facingOk = dx === 0 || Math.sign(dx) === f.attackDir;
+      const grabbable = foe.hp > 0 && foe.grounded && foe.invulnT <= 0 && facingOk;
+      if (grabbable && adx <= spec.range) {
+        enterPierce();
+      } else if (grabbable && adx <= (spec.pullRange ?? 380)) {
+        s.phase = "pull";
+        s.t = spec.pullTime ?? 0.40;
+        foe.takeGrabbed(f);
+        foe.holdT = (spec.pullTime ?? 0.40) + spec.pierceTime + (spec.slamTime ?? 0.25) + 0.6;
+        // eruption under foe's feet — tentacle bursts from the ground, not a dash
+        AudioFX.squelch();
+        AudioFX.boom();
+        Sparks.ring(foe.x, GROUND_Y - 40, 170);
+        Sparks.dust(foe.x, GROUND_Y);
+        Sparks.puff(foe.x, GROUND_Y - 60);
+        Sparks.blood(foe.x, foe.y - 80);
+        f.camKick = Math.max(f.camKick, 0.6);
+        Hitstop.t = Math.max(Hitstop.t, 0.08);
+      } else {
+        s.phase = "recover";
+        s.t = spec.recover;
+        AudioFX.whiff();
+      }
+    }
+  } else if (s.phase === "pull") {
+    s.frame = A.attack[48];
+    f.invulnT = Math.max(f.invulnT, 0.3);
+    const target = f.x + f.attackDir * 70;
+    if (foe.heldBy === f) {
+      foe.x += (target - foe.x) * Math.min(1, dt * 10);
+      foe.y += (GROUND_Y - foe.y) * Math.min(1, dt * 10);
+      foe.holdT = Math.max(foe.holdT, 0.5);
+      // dragged through blood — geyser trail
+      Sparks.blood(foe.x, foe.y - 70);
+      Sparks.hit(foe.x, foe.y - 90, f.attackDir);
+      Sparks.dust(foe.x, GROUND_Y);
+      if (Math.random() < 0.6) Sparks.ember(foe.x, foe.y - 60 - Math.random() * 60);
+    }
+    if (s.t <= 0) {
+      const dx = foe.x - f.x;
+      const facingOk = dx === 0 || Math.sign(dx) === f.attackDir;
+      if (foe.heldBy === f && foe.hp > 0 && facingOk && Math.abs(dx) <= spec.range + 60) {
+        enterPierce();
+      } else {
+        if (foe.heldBy === f) { foe.heldBy = null; if (foe.hp > 0) foe.state = "IDLE"; }
+        s.phase = "recover";
+        s.t = spec.recover;
+        AudioFX.whiff();
+      }
+    }
+  } else if (s.phase === "pierce") {
+    s.frame = A.attack[50];
+    foe.x = f.x + f.attackDir * 70;
+    // SKEWERED OVERHEAD: hoisted off the ground, thrashing on the spike
+    foe.y = GROUND_Y - 130 + Math.sin(s.t * 30) * 8;
+    foe.holdT = Math.max(foe.holdT, 0.6);
+    f.invulnT = Math.max(f.invulnT, 0.3);
+    if (!s.echoed && s.t < spec.pierceTime * 0.5) {
+      s.echoed = true;
+      AudioFX.roar();
+      f.camKick = Math.max(f.camKick, 0.7);
+    }
+    if (!s.struckThis) {
+      s.struckThis = true;
+      if (foe.heldBy === f) { foe.heldBy = null; foe.state = "IDLE"; foe.takeGrabbed(f); }
+      foe.takeHit(
+        { damage: spec.pierce, hitstun: spec.pierceStun, knockback: spec.pierceKnock },
+        f.attackDir
+      );
+      foe.vuln = true;
+      if (typeof foe.applyDecay === "function") foe.applyDecay(DECAY.ticks);
+      AudioFX.hit();
+      AudioFX.snikt();
+      AudioFX.boom();
+      f.camKick = Math.max(f.camKick, 0.8);
+      Hitstop.t = Math.max(Hitstop.t, 0.12);
+      Sparks.blood(foe.x, foe.y - 100);
+      Sparks.blood(foe.x, foe.y - 80);
+      Sparks.hit(foe.x, foe.y - 100, f.attackDir);
+      Sparks.ring(foe.x, foe.y - 100, 170);
+      Sparks.dust(f.x, GROUND_Y);
+    }
+    s.tickAcc += dt;
+    const step = spec.pierceTime / (spec.ticks ?? 5);
+    if (s.tickN < (spec.ticks ?? 5) && s.tickAcc >= (s.tickN + 1) * step) {
+      if (foe.hp > 0) {
+        foe.hp = Math.max(0, foe.hp - (spec.tickDmg ?? 5) * vulnMult(foe, false));
+        foe.sinceDamageT = 0;
+        // blood fountain — 3x geyser per rip
+        Sparks.blood(foe.x, foe.y - 100);
+        Sparks.blood(foe.x, foe.y - 90);
+        Sparks.blood(foe.x, foe.y - 110);
+        Sparks.hit(foe.x, foe.y - 100, f.attackDir);
+        Sparks.ember(foe.x + (Math.random() - 0.5) * 60, foe.y - 80 - Math.random() * 40);
+        AudioFX.hit();
+        AudioFX.squelch();
+        f.camKick = Math.max(f.camKick, 0.45);
+        if (foe.hp <= 0) foe.state = "KO";
+        else Hitstop.t = Math.max(Hitstop.t, 0.06);
+      }
+      s.tickN += 1;
+    }
+    if (s.t <= 0) {
+      s.phase = "slam";
+      s.t = spec.slamTime ?? 0.15;
+      s.struckThis = false;
+    }
+  } else if (s.phase === "slam") {
+    s.frame = A.attack[47];
+    foe.x = f.x + f.attackDir * 70;
+    foe.holdT = Math.max(foe.holdT, 0.3);
+    if (!s.struckThis) {
+      s.struckThis = true;
+      if (foe.heldBy === f) { foe.heldBy = null; if (foe.hp > 0) foe.state = "IDLE"; }
+      foe.y = GROUND_Y;
+      foe.takeHit(
+        { damage: spec.finale ?? 18, hitstun: spec.finaleStun ?? 0.80, knockback: spec.finaleKnock ?? 750 },
+        f.attackDir
+      );
+      if (foe.hp > 0) foe.knockdown(f.attackDir, spec.finaleKnock ?? 750, 520);
+      AudioFX.hit();
+      AudioFX.boom();
+      AudioFX.roar();
+      Hitstop.t = Math.max(Hitstop.t, 0.15);
+      f.camKick = Math.max(f.camKick, 1.2);
+      // massacre crater
+      Sparks.ring(foe.x, GROUND_Y - 60, 260);
+      Sparks.ring(foe.x, GROUND_Y - 110, 180);
+      Sparks.ring(foe.x, GROUND_Y - 40, 130);
+      Sparks.dust(foe.x, GROUND_Y);
+      Sparks.dust(foe.x + 40, GROUND_Y);
+      Sparks.dust(foe.x - 40, GROUND_Y);
+      Sparks.puff(foe.x, GROUND_Y - 40);
+      Sparks.blood(foe.x, GROUND_Y - 80);
+      Sparks.blood(foe.x, GROUND_Y - 100);
+      Sparks.blood(foe.x, GROUND_Y - 60);
+    }
+    if (s.t <= 0) {
+      s.phase = "recover";
+      s.t = spec.recover;
+    }
+  } else {
+    if (foe.heldBy === f) { foe.heldBy = null; if (foe.hp > 0) foe.state = "IDLE"; }
+    s.frame = A.idle[0];
+    if (s.t <= 0) endSpecial(f);
+  }
+}
+
+export function trySpidermanSpecial(f, id, foe) {
+  if (f.kind !== "spiderman") return false;
+  if ((id === "yank" || id === "maelstrom") && (!foe.grounded || foe.hp <= 0)) return false;
+  const spec = beginSpecial(f, foe, SPIDERMAN_SPECIALS, id);
+  if (!spec) return false;
+  f.attackDir = f.facing;
+  f.state = "SPECIAL";
+  f.specialId = id;
+  if (id === "webshot") {
+    f.special = { phase: "startup", t: spec.startup, struckThis: false, acc: 0, frame: null };
+  } else if (id === "yank") {
+    f.special = { phase: "startup", t: spec.startup, struckThis: false, acc: 0, frame: null };
+  } else {
+    f.special = { phase: "transform", t: spec.transform, i: 0, struck: false, struckThis: false, acc: 0, frame: null };
+    foe.freezeT = spec.transform + spec.frames.length * spec.strikeTime +
+      (spec.frames.length - 1) * spec.gapTime + 0.6 + spec.recover + 0.15;
+    Hitstop.t = Math.max(Hitstop.t, 0.2);
+    Sparks.ring(foe.x, foe.y - 80, 110);
+    AudioFX.powerup();
+    AudioFX.thwip();
+  }
+  return true;
+}
+
+export function trySpidermanZip(f, screenDir) {
+  if (f.kind !== "spiderman") return false;
+  const spec = SPIDERMAN_SPECIALS.zip;
+  if (!spec || f.hp <= 0 || f.freezeT > 0 || f.webT > 0) return false;
+  if (f.zipCD > 0) return false;
+  if (f.rage < spec.costPts) return false;
+  if (f.state === "SPECIAL" || f.state === "KO" || f.state === "GRAB" ||
+    f.state === "THROWN" || f.state === "HITSTUN" ||
+    f.state === "BLOCKSTUN" || f.state === "KDOWN") return false;
+  f.rage = Math.max(0, f.rage - spec.costPts);
+  f.attackId = null;
+  f.phase = null;
+  f.chainQueued = false;
+  f.knockVX = 0;
+  f.stateT = 0;
+  f.state = "SPECIAL";
+  f.specialId = "zip";
+  f.special = {
+    phase: "crouch", t: spec.crouch, dir: screenDir >= 0 ? 1 : -1,
+    acc: 0, frame: null, distLeft: spec.dist,
+  };
+  f.zipCD = spec.cooldown;
+  AudioFX.thwip();
+  return true;
+}
+
+function webshotMove(spec) {
+  return {
+    damage: spec.damage, hitstun: spec.hitstun, knockback: spec.knockback,
+    hitstop: spec.hitstop, level: spec.level, blockstun: spec.blockstun,
+    blockPush: spec.blockPush, chip: spec.chip, hit: { w: 0, top: 0, h: 0 },
+  };
+}
+
+function updateWebshot(f, foe, dt) {
+  const spec = SPIDERMAN_SPECIALS.webshot;
+  const s = f.special;
+  const A = f.sprites;
+  s.t -= dt;
+  if (s.phase === "startup") {
+    s.frame = A.attack[51];
+    if (s.t <= 0) {
+      s.phase = "fire";
+      s.t = spec.fire;
+      s.struckThis = false;
+      const y = f.y - spec.rayTop;
+      const x1 = f.x + f.attackDir * 12;
+      const x2 = Math.max(0, Math.min(arena.width, f.x + f.attackDir * spec.rayLen));
+      Beams.spawn(x1, y, x2, y, spec.fire + 0.02, "#ffffff");
+      AudioFX.thwip();
+      f.camKick = Math.max(f.camKick, 0.2);
+    }
+  } else if (s.phase === "fire") {
+    s.frame = A.attack[51];
+    if (!s.struckThis) {
+      const y = f.y - spec.rayTop;
+      const x1 = f.x + f.attackDir * 12;
+      const x2 = Math.max(0, Math.min(arena.width, f.x + f.attackDir * spec.rayLen));
+      const ray = { x: Math.min(x1, x2), y: y - spec.rayH / 2, w: Math.abs(x2 - x1), h: spec.rayH };
+      const contact = resolveStrike(f, foe, webshotMove(spec), ray);
+      if (contact) {
+        s.struckThis = true;
+        Sparks.web(foe.x, y);
+        if (contact.type === "hit" && foe.hp > 0 && foe.grounded) {
+          foe.webT = spec.webRoot;
+          foe.moving = 0;
+          foe.blockHeld = false;
+          foe.jumpQueued = false;
+          foe.dashQueued = 0;
+        } else if (foe.hp > 0) {
+          if (contact.type === "hit") foe.knockdown(f.attackDir, spec.knockback);
+          else foe.crumple = true;
+        }
+      }
+    }
+    if (s.t <= 0) {
+      s.phase = "recover";
+      s.t = spec.recover;
+    }
+  } else {
+    s.frame = A.idle[0];
+    if (s.t <= 0) endSpecial(f);
+  }
+}
+
+function updateYank(f, foe, dt) {
+  const spec = SPIDERMAN_SPECIALS.yank;
+  const s = f.special;
+  const A = f.sprites;
+  s.t -= dt;
+  if (s.phase === "startup") {
+    s.frame = A.attack[52];
+    f.x += f.attackDir * (spec.lunge / spec.startup) * dt;
+    clampArena(f);
+    if (s.t <= 0) {
+      const dx = foe.x - f.x;
+      if (foe.hp > 0 && foe.grounded && foe.invulnT <= 0 &&
+        Math.abs(dx) <= spec.range && (dx === 0 || Math.sign(dx) === f.attackDir)) {
+        s.phase = "carry";
+        s.t = spec.carry;
+        foe.takeGrabbed(f);
+        foe.holdT = spec.carry + 0.5;
+        foe.webT = 0;
+        foe.x = f.x + f.attackDir * 55;
+        AudioFX.thwip();
+        Sparks.web(foe.x, foe.y - 90);
+      } else {
+        s.phase = "recover";
+        s.t = spec.recover;
+        AudioFX.whiff();
+      }
+    }
+  } else if (s.phase === "carry") {
+    s.frame = A.attack[52];
+    const target = f.x + f.attackDir * 55;
+    if (foe.heldBy === f) {
+      foe.x += (target - foe.x) * Math.min(1, dt * 12);
+      foe.y += (GROUND_Y - foe.y) * Math.min(1, dt * 12);
+      foe.holdT = Math.max(foe.holdT, 0.5);
+    }
+    f.invulnT = Math.max(f.invulnT, 0.2);
+    if (s.t <= 0) {
+      s.phase = "toss";
+      s.t = spec.tossTime;
+      s.struckThis = false;
+    }
+  } else if (s.phase === "toss") {
+    s.frame = A.attack[53];
+    if (!s.struckThis) {
+      s.struckThis = true;
+      if (foe.heldBy === f) { foe.heldBy = null; foe.state = "IDLE"; }
+      foe.takeHit(
+        { damage: spec.damage, hitstun: spec.hitstun, knockback: spec.knockback },
+        f.attackDir
+      );
+      if (foe.hp > 0) foe.knockdown(f.attackDir, spec.knockback, 300);
+      AudioFX.hit();
+      f.camKick = Math.max(f.camKick, 0.6);
+      Sparks.web(foe.x, GROUND_Y - 80);
+      Sparks.dust(foe.x, GROUND_Y);
+    }
+    if (s.t <= 0) {
+      s.phase = "recover";
+      s.t = spec.recover;
+    }
+  } else {
+    if (foe.heldBy === f) { foe.heldBy = null; if (foe.hp > 0) foe.state = "IDLE"; }
+    s.frame = A.idle[0];
+    if (s.t <= 0) endSpecial(f);
+  }
+}
+
+function maelstromFrenzy(spec) {
+  const h = spec.frenzy;
+  return {
+    damage: h.damage, hitstun: h.stun, knockback: h.knock, hitstop: h.stop,
+    level: "mid", blockstun: 0.15, blockPush: 200, chip: h.chip, hit: spec.hit,
+  };
+}
+
+function maelstromBlink(f, foe, i) {
+  const spec = SPIDERMAN_SPECIALS.maelstrom;
+  Clones.spawn(f.currentFrame(), f.x, f.y, f.facing, 0.35);
+  Sparks.puff(f.x, f.y - 80);
+  AudioFX.whoosh();
+  f.x = foe.x + spec.sides[i] * 58;
+  clampArena(f);
+  f.attackDir = foe.x >= f.x ? 1 : -1;
+  f.facing = f.attackDir;
+  Sparks.puff(f.x, f.y - 80);
+  Sparks.web(f.x, f.y - 80);
+  f.special.frame = f.sprites.attack[spec.frames[i]];
+  f.special.struckThis = false;
+}
+
+function updateMaelstrom(f, foe, dt) {
+  const spec = SPIDERMAN_SPECIALS.maelstrom;
+  const s = f.special;
+  s.t -= dt;
+  if (s.phase === "transform") {
+    s.frame = f.sprites.attack[59];
+    f.invulnT = 4.5;
+    if (Math.random() < 0.6) Sparks.web(f.x + (Math.random() - 0.5) * 60, f.y - 60 - Math.random() * 60);
+    if (s.t <= 0) {
+      s.i = 0;
+      maelstromBlink(f, foe, 0);
+      s.phase = "strike";
+      s.t = spec.strikeTime;
+      AudioFX.thwip();
+    }
+  } else if (s.phase === "strike") {
+    if (!s.struckThis) {
+      const last = s.i === spec.frames.length - 1;
+      const move = last
+        ? { damage: spec.finale, hitstun: spec.finaleStun, knockback: spec.finaleKnock, hitstop: 0.12, level: "mid", blockstun: 0.35, blockPush: 450, chip: 3, hit: spec.hit }
+        : maelstromFrenzy(spec);
+      const contact = resolveStrike(f, foe, move);
+      if (contact) {
+        s.struckThis = true;
+        s.struck = true;
+        Sparks.web(foe.x, foe.y - 90);
+        f.camKick = Math.max(f.camKick, last ? 0.6 : 0.12);
+        if (last && contact.type === "hit" && foe.hp > 0) {
+          foe.knockdown(f.attackDir, spec.finaleKnock, spec.finaleLaunch);
+        }
+      }
+    }
+    if (s.t <= 0) {
+      if (s.i === 0 && !s.struck) {
+        s.phase = "recover";
+        s.t = spec.recoverAbort;
+        foe.freezeT = Math.min(foe.freezeT, 0.35);
+      } else if (s.i >= spec.frames.length - 1) {
+        s.phase = "recover";
+        s.t = spec.recover;
+      } else {
+        s.phase = "gap";
+        s.t = spec.gapTime;
+      }
+    }
+  } else if (s.phase === "gap") {
+    if (s.t <= 0) {
+      s.i += 1;
+      maelstromBlink(f, foe, s.i);
+      s.phase = "strike";
+      s.t = spec.strikeTime;
+    }
+  } else {
+    s.frame = f.sprites.attack[spec.frames[Math.min(s.i, spec.frames.length - 1)]];
+    if (s.t <= 0) endSpecial(f);
+  }
+}
+
+function updateZip(f, foe, dt) {
+  const spec = SPIDERMAN_SPECIALS.zip;
+  const s = f.special;
+  s.t -= dt;
+  if (s.phase === "crouch") {
+    s.frame = f.sprites.attack[54];
+    if (Math.random() < 0.5) Sparks.dust(f.x, GROUND_Y);
+    if (s.t <= 0) {
+      s.phase = "swing";
+      s.t = spec.swing;
+      s.distLeft = spec.dist;
+      s.acc = 0;
+      f.invulnT = Math.max(f.invulnT, 0.12);
+      AudioFX.whoosh();
+      AudioFX.thwip();
+    }
+  } else if (s.phase === "swing") {
+    s.frame = f.sprites.dash[0];
+    const want = Math.min((spec.dist / spec.swing) * dt, s.distLeft);
+    f.x += s.dir * want;
+    s.distLeft -= want;
+    clampArena(f);
+    s.acc += dt;
+    while (s.acc >= 0.05) {
+      s.acc -= 0.05;
+      Clones.spawn(f.currentFrame(), f.x, f.y, f.facing, 0.25);
+      Sparks.web(f.x - s.dir * 20, f.y - 60);
+    }
+    if (s.t <= 0 || s.distLeft <= 0) {
+      s.phase = "reform";
+      s.t = spec.reform;
+      Sparks.dust(f.x, GROUND_Y);
+    }
+  } else {
+    s.frame = f.sprites.crouch[0];
+    if (s.t <= 0) endSpecial(f);
+  }
+}
+
+export function trySpidermanSwing(f, screenDir) {
+  if (f.kind !== "spiderman") return false;
+  const spec = SPIDERMAN_SPECIALS.swing;
+  if (!spec || f.hp <= 0 || f.freezeT > 0 || f.webT > 0) return false;
+  if (f.swingCD > 0 || f.grounded) return false;
+  if (f.state !== "JUMP" && f.state !== "FALL") return false;
+  f.attackId = null;
+  f.phase = null;
+  f.chainQueued = false;
+  f.knockVX = 0;
+  f.stateT = 0;
+  f.state = "SPECIAL";
+  f.specialId = "swing";
+  f.special = {
+    phase: "shoot", t: spec.shoot, dir: screenDir >= 0 ? 1 : -1,
+    acc: 0, frame: null,
+  };
+  f.attackDir = screenDir >= 0 ? 1 : -1;
+  f.facing = f.attackDir;
+  f.swingCD = spec.cooldown;
+  AudioFX.thwip();
+  return true;
+}
+
+function swingWebLine(f, dir) {
+  const hx = f.x + dir * 8, hy = f.y - 130;
+  WebLines.shoot(hx, hy, f.x + dir * 40, f.y - 260, 0.08);
+}
+
+function updateSwing(f, foe, dt) {
+  const spec = SPIDERMAN_SPECIALS.swing;
+  const s = f.special;
+  s.t -= dt;
+  if (s.phase === "shoot") {
+    s.frame = f.sprites.attack[61];
+    swingWebLine(f, s.dir);
+    if (Math.random() < 0.6) Sparks.web(f.x + 4, f.y - 150);
+    if (s.t <= 0) {
+      s.phase = "swing";
+      s.t = spec.swing;
+      s.x0 = f.x;
+      s.y0 = f.y;
+      AudioFX.whoosh();
+    }
+  } else {
+    s.frame = f.sprites.attack[61];
+    const el = spec.swing - Math.max(0, s.t);
+    const k = Math.min(1, el / spec.swing);
+    f.x = s.x0 + s.dir * spec.travel * k;
+    clampArena(f);
+    const y = s.y0 + spec.dip * Math.sin(Math.PI * k);
+    f.vy = (spec.dip * Math.PI * Math.cos(Math.PI * k)) / spec.swing;
+    if (y >= GROUND_Y) {
+      f.y = GROUND_Y;
+      f.vy = 0;
+      f.grounded = true;
+      Sparks.dust(f.x, GROUND_Y);
+      endSpecial(f);
+      return;
+    }
+    f.y = y;
+    f.grounded = false;
+    swingWebLine(f, s.dir);
+    if (s.t <= 0) endSpecial(f);
+  }
+}
+
+export function tryDoomPhoton(f) {
+  if (f.kind !== "doom") return false;
+  if (f.hp <= 0 || f.freezeT > 0 || f.webT > 0 || !f.grounded) return false;
+  if (f.state === "ATTACK" && f.attackId === "photon") return false;
+  const ok = ["IDLE", "WALK", "CROUCH", "SNEAK", "BLOCK", "DASH", "BACKDASH", "LAND"];
+  if (f.state === "ATTACK") { f.startAttack("photon"); AudioFX.repulsor(); return true; }
+  if (!ok.includes(f.state)) return false;
+  f.startAttack("photon");
+  AudioFX.repulsor();
+  return true;
+}
+
+export function tryDoomSnap(f, foe) {
+  if (f.kind !== "doom") return false;
+  const spec = { cooldown: 0.40, fallTime: 0.50 };
+  if (!foe || f.hp <= 0 || f.freezeT > 0 || f.webT > 0 || !f.grounded) return false;
+  if (f.snapCD > 0) return false;
+  if (["SPECIAL", "KO", "GRAB", "THROWN", "HITSTUN", "BLOCKSTUN", "KDOWN", "ATTACK"].includes(f.state)) return false;
+  f.attackId = null; f.phase = null; f.chainQueued = false; f.knockVX = 0;
+  f.state = "SPECIAL"; f.specialId = "snap";
+  f.attackDir = f.facing;
+  f.special = { phase: "aim", t: 0.50, acc: 0, tx: foe.x, struckThis: false, frame: null };
+  f.snapCD = spec.cooldown;
+  AudioFX.snap();
+  Sparks.puff(f.x + f.attackDir * 20, f.y - 130);
+  Missiles.launch(foe.x, GROUND_Y, spec.fallTime);
+  Sparks.ring(foe.x, GROUND_Y - 40, 90);
+  return true;
+}
+
+function doomSnapDamage(f) {
+  return f.moves.snap ? f.moves.snap.damage : 2.75;
+}
+
+function updateDoomSnap(f, foe, dt) {
+  const s = f.special;
+  s.t -= dt;
+  s.acc = (s.acc || 0) + dt;
+  s.frame = f.sprites.attack[68];
+  f.invulnT = Math.max(f.invulnT, 0.05);
+  if (!s.struckThis && (s.acc >= 0.50 || s.t <= 0)) {
+    s.struckThis = true;
+    const box = { x: s.tx - 130, y: GROUND_Y - 150, w: 260, h: 150 };
+    const contact = resolveStrike(f, foe,
+      { damage: doomSnapDamage(f), hitstun: 0.40, knockback: 380, hitstop: 0.06, level: "mid", blockstun: 0.22, blockPush: 360, chip: 1, heat: true, sky: true, hit: { w: 0, top: 0, h: 0 } }, box);
+    if (contact && contact.type === "hit") Sparks.blood(s.tx, GROUND_Y - 80);
+    AudioFX.boom();
+    f.camKick = Math.max(f.camKick, 0.35);
+    Sparks.ring(s.tx, GROUND_Y - 60, 130);
+    Sparks.dust(s.tx, GROUND_Y);
+    s.phase = "recover"; s.t = 0.30;
+  }
+  if (s.phase === "recover" && s.t <= 0) endSpecial(f);
+}
+
+export function tryDoomSpecial(f, id, foe) {
+  if (f.kind !== "doom") return false;
+  if (id === "throne") {
+    if (foe.hp <= 0 || !foe.grounded) return false;
+    const spec = DOOM_SPECIALS.throne;
+    if (!foe || f.hp <= 0 || f.freezeT > 0) return false;
+    if (["SPECIAL", "KO", "GRAB", "THROWN"].includes(f.state)) return false;
+    if (Math.abs(foe.x - f.x) > spec.maxRange) return false;
+    if (f.rageLevel < spec.cost) return false;
+    if (!f.spendRage(spec.cost)) return false;
+    f.y = GROUND_Y; f.vy = 0; f.grounded = true;
+    f.attackId = null; f.phase = null; f.chainQueued = false;
+    f.knockVX = 0; f.attackDir = foe.x >= f.x ? 1 : -1; f.facing = f.attackDir;
+    f.state = "SPECIAL"; f.specialId = "throne";
+    f.special = { phase: "summon", t: spec.summon, tickN: 0, struckThis: false, frame: null, hx: foe.x };
+    foe.freezeT = spec.summon + spec.barrage + spec.meteorFall + spec.recover + 0.15;
+    Hitstop.t = Math.max(Hitstop.t, 0.2);
+    Sparks.ring(foe.x, foe.y - 80, 110);
+    Sparks.ring(foe.x - 60, foe.y - 80, 60);
+    Sparks.ring(foe.x + 60, foe.y - 80, 60);
+    f.invulnT = spec.summon + spec.barrage + spec.meteorFall + spec.recover + 0.2;
+    AudioFX.powerup();
+    return true;
+  }
+  return false;
+}
+
+// Damage falls off with how far the orb had to travel. Uses orb.travelled
+// rather than raw distance-to-foe so the number is stable no matter how the foe
+// moves during the volley.
+function doomBarrageDamage(spec, travelled) {
+  const k = Math.max(0, Math.min(1, travelled / spec.farDist));
+  return spec.farDmg + (spec.nearDmg - spec.farDmg) * (1 - k);
+}
+
+export function tryDoomBarrage(f, foe) {
+  if (f.kind !== "doom") return false;
+  const spec = DOOM_SPECIALS.barrage;
+  if (!foe || f.hp <= 0 || f.freezeT > 0 || f.webT > 0) return false;
+  if (["SPECIAL", "KO", "GRAB", "THROWN"].includes(f.state)) return false;
+  if (f.state === "ATTACK") { f.startAttack("photon"); return true; }
+  if (Math.abs(foe.x - f.x) > spec.maxRange) return false;
+  // free move: no rage spend
+  f.y = GROUND_Y; f.vy = 0; f.grounded = true;
+  f.attackId = null; f.phase = null; f.chainQueued = false;
+  f.knockVX = 0; f.attackDir = f.facing; f.state = "SPECIAL"; f.specialId = "barrage";
+  f.special = { phase: "startup", t: spec.startup, fired: 0, struckThis: false, frame: null };
+  AudioFX.repulsor();
+  return true;
+}
+
+function updateDoomBarrage(f, foe, dt) {
+  const spec = DOOM_SPECIALS.barrage;
+  const s = f.special;
+  s.t -= dt;
+  if (s.phase === "startup") {
+    s.frame = f.sprites.attack[62];
+    if (Math.random() < 0.7) Sparks.ember(f.x + (Math.random() - 0.5) * 90, f.y - spec.ringY + (Math.random() - 0.5) * 60);
+    if (s.t <= 0) { s.phase = "fire"; s.t = spec.orbGap; }
+  } else if (s.phase === "fire") {
+    s.frame = f.sprites.attack[67];
+    if (s.fired < spec.orbs) {
+      // ring of five around Doom, evenly spaced, each aimed at where the foe is
+      const slot = s.fired / spec.orbs * Math.PI * 2 - Math.PI / 2;
+      const ox = f.x + Math.cos(slot) * spec.ringR;
+      const oy = f.y - spec.ringY + Math.sin(slot) * spec.ringR * 0.55;
+      PlasmaOrbs.spawn(ox, oy, foe.x, foe.y - 90, {
+        life: spec.orbLife, speed: spec.orbSpeed,
+        phase: slot, orbit: spec.ringR, r: 9,
+      });
+      s.fired += 1;
+      s.t = spec.orbGap;
+      AudioFX.zap();
+    } else {
+      s.phase = "recover"; s.t = spec.recover;
+    }
+  } else {
+    s.frame = f.sprites.idle[0];
+    if (s.t <= 0) endSpecial(f);
+  }
+}
+
+// Orbs deal their own damage on contact, so they resolve against the foe
+// outside the special's own tick.
+export function updateDoomBarrageOrbs(f, foe, dt) {
+  const spec = DOOM_SPECIALS.barrage;
+  for (const o of PlasmaOrbs.list) {
+    if (o.done) continue;
+    if (foe.hp <= 0 || foe.invulnT > 0) continue;
+    if (o.travelled > spec.farDist) {
+      o.done = true;
+      o.fuse = true;
+      continue;
+    }
+    const box = { x: o.x - o.r, y: o.y - o.r, w: o.r * 2, h: o.r * 2 };
+    if (!overlap(box, hurtboxOf(foe))) continue;
+    o.done = true;
+    const dmg = doomBarrageDamage(spec, o.travelled);
+    const contact = resolveStrike(f, foe,
+      { damage: dmg, hitstun: spec.hitstun, knockback: spec.knockback, hitstop: spec.hitstop,
+        level: "mid", blockstun: spec.blockstun, blockPush: spec.blockPush, chip: spec.chip,
+        heat: true, hit: { w: 0, top: 0, h: 0 } }, box);
+    if (contact) {
+      Sparks.hit(o.x, o.y, f.attackDir);
+      f.camKick = Math.max(f.camKick, 0.25);
+      AudioFX.hit();
+    }
+  }
+}
+
+function updateDoomThrone(f, foe, dt) {
+  const spec = DOOM_SPECIALS.throne;
+  const s = f.special;
+  s.t -= dt;
+  if (s.phase === "summon") {
+    // Doom stays far away and sits; two magic constructs pin the foe in place
+    s.frame = f.sprites.attack[69];
+    f.invulnT = Math.max(f.invulnT, 0.3);
+    foe.holdT = Math.max(foe.holdT, 0.5);
+    if (Math.random() < 0.6) {
+      Sparks.ember(foe.x - 60, foe.y - 60 - Math.random() * 60);
+      Sparks.ember(foe.x + 60, foe.y - 60 - Math.random() * 60);
+    }
+    if (s.t <= 0) {
+      s.phase = "barrage"; s.t = spec.barrage; s.tickN = 0;
+      s.hx = foe.x;
+      AudioFX.roar();
+      Sparks.ring(foe.x, foe.y - 100, 150);
+    }
+  } else if (s.phase === "barrage") {
+    // seated Doom watches: sky beams rain on the held foe
+    s.frame = f.sprites.attack[69];
+    f.invulnT = Math.max(f.invulnT, 0.3);
+    foe.holdT = Math.max(foe.holdT, 0.5);
+    const elapsed = spec.barrage - Math.max(0, s.t);
+    if (s.tickN < spec.beamTicks && elapsed + 1e-9 >= (s.tickN + 1) * (spec.barrage / spec.beamTicks)) {
+      Bolts.strike(foe.x + (Math.random() - 0.5) * 40, GROUND_Y, foe.y - 220, 0.25);
+      Beams.spawn(foe.x - 30, foe.y - 220, foe.x + 30, foe.y - 220, 0.10, "#ffd23e");
+      AudioFX.zap();
+      f.camKick = Math.max(f.camKick, 0.25);
+      if (foe.hp > 0) {
+        foe.hp = Math.max(0, foe.hp - spec.beamDmg * vulnMult(foe, true));
+        foe.sinceDamageT = 0;
+        Sparks.hit(foe.x, foe.y - 100, f.attackDir);
+        if (foe.hp <= 0) foe.state = "KO";
+        else Hitstop.t = Math.max(Hitstop.t, 0.03);
+      }
+      s.tickN += 1;
+    }
+    if (s.t <= 0) {
+      s.phase = "meteor"; s.t = spec.meteorFall; s.metStruck = false;
+      s.tx = foe.x;
+      Missiles.launch(s.tx, GROUND_Y, spec.meteorFall);
+      Sparks.ring(s.tx, GROUND_Y - 40, 90);
+      AudioFX.whoosh();
+    }
+  } else if (s.phase === "meteor") {
+    s.frame = f.sprites.attack[68];
+    f.invulnT = Math.max(f.invulnT, 0.3);
+    if (s.t <= 0 && !s.metStruck) {
+      s.metStruck = true;
+      const box = { x: s.tx - 60, y: GROUND_Y - 150, w: 120, h: 150 };
+      const contact = resolveStrike(f, foe,
+        { damage: spec.meteorDmg, hitstun: 0.7, knockback: 500, hitstop: 0.14, level: "mid", blockstun: 0.50, blockPush: 600, chip: 10, heat: true, sky: true, hit: { w: 0, top: 0, h: 0 } }, box);
+      if (contact && foe.hp > 0 && contact.type === "hit") {
+        foe.knockdown(f.attackDir, 500, 0, 800);
+        // pin to the ground for the full downTime (base KDOWN is 0.95s)
+        const base = MOVE.KDOWN_FALL + MOVE.KDOWN_TIME + MOVE.KDOWN_RISE;
+        foe.kT = Math.min(foe.kT, -(spec.downTime - base));
+      } else if (contact && foe.hp > 0 && contact.type === "block") foe.crumple = true;
+      AudioFX.hit(); AudioFX.boom();
+      f.camKick = Math.max(f.camKick, 1.0);
+      Sparks.ring(s.tx, GROUND_Y - 60, 260);
+      Sparks.ring(s.tx, GROUND_Y - 110, 170);
+      Sparks.dust(s.tx, GROUND_Y);
+      s.phase = "recover"; s.t = spec.recover;
+    }
+  } else {
+    s.frame = f.sprites.idle[0];
+    if (s.t <= 0) endSpecial(f);
+  }
+}
+
+// ---- Doom Bot ----------------------------------------------------------
+// Doom blinks through a portal and a weakened clone rises in his place and
+// fights on his behalf. The clone is a real Fighter, so the opponent's existing
+// hitboxes, blocks and grabs all work against it unchanged -- but it has no
+// specials at all (SPACE / F / O are inert on it) and trades 10% hp and damage.
+// While it lives Doom is untargetable; when it dies or times out he steps back.
+
+function makeDoomBot(f, spec, x) {
+  const bot = new Fighter("doom", x, GROUND_Y);
+  bot.isDoomBot = true;
+  bot.owner = f;
+  bot.maxHp = Math.round(bot.maxHp * spec.hpMult);
+  bot.hp = bot.maxHp;
+  // scale every damage number the clone can deal
+  for (const mv of Object.values(bot.moves)) mv.damage *= spec.dmgMult;
+  bot.rage = 0;
+  bot.noSpecials = true;
+  bot.specialId = null;
+  bot.special = null;
+  bot.facing = f.facing;
+  bot.invulnT = spec.rise + 0.1;
+  bot.botT = 0;
+  bot.botLife = spec.botLife;
+  bot.botAI = null;
+  bot.botRise = 0;
+  return bot;
+}
+
+export function tryDoomBot(f, foe) {
+  if (f.kind !== "doom") return false;
+  const spec = DOOM_SPECIALS.bot;
+  if (!foe || f.hp <= 0 || f.freezeT > 0 || f.webT > 0 || !f.grounded) return false;
+  if (f.doomBot) return false;                       // one bot at a time
+  if (["SPECIAL", "KO", "GRAB", "THROWN", "HITSTUN", "BLOCKSTUN", "KDOWN"].includes(f.state)) return false;
+  if (Math.abs(foe.x - f.x) > spec.maxRange) return false;
+  if (f.rageLevel < spec.cost) return false;
+  if (!f.spendRage(spec.cost)) return false;
+  f.y = GROUND_Y; f.vy = 0; f.grounded = true;
+  f.attackId = null; f.phase = null; f.chainQueued = false;
+  f.knockVX = 0; f.attackDir = f.facing; f.state = "SPECIAL"; f.specialId = "bot";
+  f.special = { phase: "portal", t: spec.openPortal, struckThis: false, frame: null };
+  f.invulnT = spec.openPortal + spec.rise + spec.recover + 0.2;
+  AudioFX.powerup();
+  return true;
+}
+
+function updateDoomBot(f, foe, dt) {
+  const spec = DOOM_SPECIALS.bot;
+  const s = f.special;
+  s.t -= dt;
+  if (s.phase === "portal") {
+    s.frame = f.sprites.attack[69];
+    if (!s.portal) s.portal = Portals.open(f.x, GROUND_Y, 99, f);
+    if (Math.random() < 0.5) Sparks.ember(f.x + (Math.random() - 0.5) * 60, GROUND_Y - Math.random() * 140);
+    if (s.t <= 0) {
+      f.doomBot = makeDoomBot(f, spec, f.x);
+      if (DOOM_OWNERS.indexOf(f) < 0) DOOM_OWNERS.push(f);
+      Sparks.ring(f.x, GROUND_Y - 60, 120);
+      Sparks.dust(f.x, GROUND_Y);
+      Bolts.strike(f.x, GROUND_Y, GROUND_Y - 190, 0.30);
+      AudioFX.roar();
+      s.phase = "rise"; s.t = spec.rise;
+    }
+  } else if (s.phase === "rise") {
+    s.frame = f.sprites.idle[0];
+    const k = 1 - Math.max(0, s.t) / spec.rise;
+    f.awayAlpha = k;                  // Doom fades into the portal
+    if (f.doomBot) f.doomBot.botRise = k;
+    if (s.t <= 0) {
+      f.awayAlpha = 0;
+      f.away = true;
+      f.state = "IDLE";
+      f.specialId = null; f.special = null;
+      if (s.portal) s.portal.life = s.portal.t + 99;   // stays open while away
+    }
+  }
+}
+
+// The clone is driven by the real AIController at Medium difficulty -- the same
+// brain a CPU opponent uses, so it spaces, pokes, whiffs and blocks exactly
+// like one. What makes it a downgrade rather than a second Doom is not a weaker
+// brain but a weaker body: 10% less hp, 10% less damage, and noSpecials, so
+// every attempt to use SPACE/F/O is refused. That is the whole trade -- a
+// Medium-AI Doom with no specials and less of everything.
+export const BOT_DIFF = "medium";
+
+// The AI reads ctx.side/ctx.tagCD to decide when to tag out. The clone has no
+// team and no bench, so it must never receive one.
+const BOT_CTX = Object.freeze({ tagCD: Infinity });
+
+function driveDoomBot(bot, foe, dt) {
+  bot.botT += dt;
+  if (bot.hp <= 0 || foe.hp <= 0 || bot.botT > bot.botLife) return;
+  bot.faceOpponent(foe);
+  if (!bot.botAI) bot.botAI = new AIController(BOT_DIFF);
+  bot.botAI.update(dt, bot, foe, BOT_CTX);
+}
+
+// While a bot is out, the opponent's strikes need to land on it rather than on
+// the untargetable Doom. main.js swaps the defender with this.
+export function doomBotTarget(f) {
+  if (f.away && f.doomBot && f.doomBot.hp > 0) return f.doomBot;
+  return f;
+}
+
+export function updateDoomBots(dt, getFoe) {
+  for (const f of DOOM_OWNERS) {
+    const bot = f.doomBot;
+    if (!bot) { f.away = false; continue; }
+    const foe = getFoe(f);
+    if (bot.hp <= 0 || bot.botT > bot.botLife || f.hp <= 0) {
+      Sparks.ring(bot.x, GROUND_Y - 60, 120);
+      Sparks.dust(bot.x, GROUND_Y);
+      Bolts.strike(bot.x, GROUND_Y, GROUND_Y - 170, 0.25);
+      AudioFX.boom();
+      f.x = Math.max(MOVE.ARENA_MARGIN, Math.min(arena.width - MOVE.ARENA_MARGIN, bot.x));
+      f.invulnT = Math.max(f.invulnT, 0.35);
+      f.away = false;
+      f.awayAlpha = 0;
+      f.doomBot = null;
+      f.state = "IDLE";
+      f.specialId = null;
+      f.special = null;
+      Portals.closeFor(f);
+      continue;
+    }
+    if (f.away) {
+      driveDoomBot(bot, foe, dt);
+      bot.update(dt, foe);
+    }
+  }
+}
+
+export const DOOM_OWNERS = [];

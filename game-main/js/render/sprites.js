@@ -1,25 +1,8 @@
-// Procedural pixel-art sprites for Wesker + Homelander.
-// No external assets: every frame is drawn 1px at a time on a tiny canvas
-// (36x52) then upscaled with smoothing OFF => crisp pixel look.
-// Frames: idle[4], walk[4], attack[18] (jab, kick, cross, overhead-raise,
-// windup, slam, palm, elbow, backfist, cobra, hook, sweep, SAMURAI EDGE,
-// crouch palm, crouch jab, crouch sweep, air kick, air slam), crouch[2],
-// sneak[4], jump[5] (anticip/rise/hang/fall/fast-fall, cloth vy-read), dash[2],
-// block[2] (stand guard, crouch guard), grab[1] (seize reach),
-// special[11] (tackle, unmasked, lase gaze, shout, unmaskMid, leap, hover,
-// charge, inhale, ascend, carry), kdown[12] (full knockdown: flat-out + getup),
-// strain[1] (Homelander throw grimace).
-// Attacks animate per phase: windup on startup, strike on active,
-// follow-through on recovery (mapped in combat/data.js FRAME_FOR).
-// JS concept vs Python: a `class`-free factory pattern — `buildSprites(kind)`
-// returns a plain object of canvases. No inheritance needed yet.
-
 import { makeCanvas, px } from "./pixel.js";
 import { SPRITE_W, SPRITE_H } from "../config.js";
 
 const OUT = "#06060c";
 
-// Knockdown palettes: full-body-down art is shared code, per-kind colors.
 const LY_W = Object.freeze({
   torso: "#1b1b26", rim: "#33334d", pants: "#14141c", shade: "#08080d",
   skin: "#e6b48c", hair: "#c8a45e", eye: "#0b0b10", eyeHi: "#ff3030",
@@ -31,22 +14,158 @@ const LY_H = Object.freeze({
   boot: "#a01313", bootHi: "#e05050", cape: "#a01313", belt: "#ffd23e",
 });
 
-// 12-frame knockdown: 0-1 stagger/tip, 2 collapse, 3 slam, 4-7 flat-out
-// (head on the floor, twitch/breathe variants), 8 push-up, 9 kneel,
-// 10 crouch, 11 rise. Local +x = facing (flip handles the rest); the floor
-// is row 48, head lands at -x (knocked backward).
+const LY_D = Object.freeze({
+  torso: "#1e5c33", rim: "#4fd07a", pants: "#1e5c33", shade: "#123d21",
+  skin: "#c8c8d0", hair: "#1e5c33", eye: "#ffe9a8", eyeHi: "#2fae5a",
+  boot: "#3a3a48", bootHi: "#c8c8d0", cape: "#1e5c33", belt: "#c8a45e",
+});
+
+function paintDoom(ctx, p) {
+  const cx = 18;
+  if (p.lying) { paintLying(ctx, p.lk || 0, LY_D); return; }
+  const bob = p.bob;
+  const GR = "#1e5c33", GD = "#123d21", LITE = "#4fd07a";
+  const SV = "#c8c8d0", SVD = "#8a8a98", EYE = "#ffe9a8";
+  const fist = (x, y) => {
+    px(ctx, x - 1, y - 1, 6, 6, OUT);
+    px(ctx, x, y, 4, 4, SV);
+    px(ctx, x, y, 4, 1, "#ffffff");
+  };
+  if (p.throne) {
+    // Seated monarch: throne drawn FIRST (behind), no standing legs at all.
+    // Tall stone back
+    px(ctx, cx - 11, 6 + bob, 22, 30, OUT);
+    px(ctx, cx - 10, 7 + bob, 20, 28, "#3a3a48");
+    px(ctx, cx - 10, 7 + bob, 2, 28, SV);
+    px(ctx, cx + 8, 7 + bob, 2, 28, "#23232f");
+    // green glowing trim + crest
+    px(ctx, cx - 10, 7 + bob, 20, 2, "#2fae5a");
+    px(ctx, cx - 4, 9 + bob, 8, 5, GR);
+    px(ctx, cx - 4, 9 + bob, 8, 1, LITE);
+    // seat block
+    px(ctx, cx - 13, 30 + bob, 26, 9, OUT);
+    px(ctx, cx - 12, 31 + bob, 24, 7, "#3a3a48");
+    px(ctx, cx - 12, 31 + bob, 24, 2, SV);
+    // seated torso (lower, resting against back)
+    box(ctx, cx - 6, 20 + bob, 12, 12, GR);
+    px(ctx, cx - 6, 20 + bob, 2, 12, LITE);
+    px(ctx, cx + 4, 20 + bob, 2, 12, GD);
+    px(ctx, cx - 6, 29 + bob, 12, 2, "#c8a45e");
+    // folded legs: thighs forward + shins down, boots on footrest
+    px(ctx, cx - 6, 32 + bob, 13, 4, OUT);
+    px(ctx, cx - 5, 33 + bob, 11, 2, GR);
+    px(ctx, cx + 4, 33 + bob, 4, 7, OUT);
+    px(ctx, cx + 5, 34 + bob, 2, 5, "#3a3a48");
+    px(ctx, cx + 5, 34 + bob, 2, 1, SV);
+    // arms resting on armrests
+    px(ctx, cx - 14, 26 + bob, 7, 5, OUT);
+    px(ctx, cx - 13, 27 + bob, 5, 3, GR);
+    fist(cx - 14, 24 + bob);
+    px(ctx, cx + 7, 26 + bob, 7, 5, OUT);
+    px(ctx, cx + 8, 27 + bob, 5, 3, GR);
+    fist(cx + 9, 24 + bob);
+    // head (slightly higher, chin up in disdain)
+    const hy = 9 + bob + (p.headBob || 0);
+    box(ctx, cx - 5, hy, 10, 9, SV);
+    px(ctx, cx - 5, hy, 10, 2, SVD);
+    px(ctx, cx - 5, hy - 1, 10, 3, GR);
+    px(ctx, cx - 4, hy + 4, 3, 2, EYE);
+    px(ctx, cx + 1, hy + 4, 3, 2, EYE);
+    // under-throne magic glow so it reads as floating, not standing
+    px(ctx, cx - 10, 41 + bob, 20, 2, "#2fae5a");
+    px(ctx, cx - 6, 43 + bob, 12, 1, "#4fd07a");
+    return;
+  }
+  const wv = Math.max(-2, Math.min(2, p.capeWave || 0));
+  px(ctx, cx - 10 + wv, 15 + bob, 17, 29, "#0e2f1a");
+  px(ctx, cx - 9 + wv, 16 + bob, 14, 27, GR);
+  px(ctx, cx - 10 + wv, 16 + bob, 1, 27, LITE);
+  const drop = (p.crouch ? 8 : 0) + (p.dip || 0);
+  const lean = (p.dash ? 2 : 0) + (p.wind || 0);
+  leg(ctx, cx - 6 + p.legL, 34 + bob, 12, GR, GD, "#3a3a48", SV);
+  leg(ctx, cx + 1 + p.legR, 34 + bob, 12, GR, GD, "#3a3a48", SV);
+  ctx.save();
+  ctx.translate(lean, drop);
+  box(ctx, cx - 7, 19 + bob, 14, 16, GR);
+  px(ctx, cx - 7, 19 + bob, 2, 16, LITE);
+  px(ctx, cx + 5, 19 + bob, 2, 16, GD);
+  px(ctx, cx - 7, 30 + bob, 14, 3, "#c8a45e");
+  const hy = 7 + bob + (p.headBob || 0);
+  box(ctx, cx - 5, hy, 10, 9, SV);
+  px(ctx, cx - 5, hy, 10, 2, SVD);
+  px(ctx, cx - 5, hy - 1, 10, 3, GR);
+  px(ctx, cx - 4, hy + 4, 3, 2, EYE);
+  px(ctx, cx + 1, hy + 4, 3, 2, EYE);
+  px(ctx, cx - 2, hy + 8, 4, 1, SVD);
+  if (p.snap) {
+    px(ctx, cx + 3, 12 + bob, 8, 12, OUT);
+    px(ctx, cx + 4, 13 + bob, 6, 10, GR);
+    fist(cx + 5, 10 + bob);
+    px(ctx, cx + 6, 11 + bob, 2, 1, "#ffffff");
+    px(ctx, cx - 9, 22 + bob, 5, 9, GR);
+  } else if (p.beam) {
+    px(ctx, cx - 1, 20 + bob, 13, 5, OUT);
+    px(ctx, cx, 21 + bob, 11, 3, GR);
+    fist(cx + 9, 20 + bob);
+    px(ctx, cx + 12, 21 + bob, 6, 1, "#c26bff");
+    px(ctx, cx - 9, 22 + bob, 5, 9, GR);
+  } else if (p.seize) {
+    px(ctx, cx - 1, 21 + bob, 11, 4, OUT);
+    px(ctx, cx, 22 + bob, 9, 2, GR);
+    fist(cx + 7, 21 + bob);
+    px(ctx, cx - 9, 22 + bob, 5, 9, GR);
+  } else if (p.guard === 1) {
+    px(ctx, cx + 1, 17 + bob, 6, 14, OUT);
+    px(ctx, cx + 2, 18 + bob, 4, 12, GR);
+    fist(cx + 2, 16 + bob);
+  } else if (p.guard === 2) {
+    px(ctx, cx - 9, 22 + bob, 14, 8, OUT);
+    px(ctx, cx - 8, 23 + bob, 12, 2, GR);
+    fist(cx - 8, 23 + bob);
+    fist(cx + 3, 23 + bob);
+  } else if (p.windup) {
+    px(ctx, cx - 10, 19 + bob, 7, 11, OUT);
+    px(ctx, cx - 9, 20 + bob, 5, 9, GR);
+    fist(cx - 9, 26 + bob);
+  } else if (p.slam) {
+    px(ctx, cx - 3, 24 + bob, 14, 6, OUT);
+    px(ctx, cx - 2, 25 + bob, 12, 4, GR);
+    fist(cx + 6, 23 + bob);
+  } else if (p.overhead) {
+    px(ctx, cx - 10, 8 + bob, 7, 14, OUT);
+    px(ctx, cx - 9, 9 + bob, 5, 12, GR);
+    fist(cx - 9, 7 + bob);
+  } else if (p.punch > 0) {
+    const ex = cx + 7, ey = 22 + bob - p.punch;
+    px(ctx, ex - 1, ey - 1, 12, 5, OUT);
+    px(ctx, ex, ey, 11, 3, GR);
+    fist(ex + 8, ey - 1);
+  } else if (p.kick > 0) {
+    px(ctx, cx + 2, 36 + bob, 13, 5, GR);
+    px(ctx, cx + 11, 35 + bob, 4, 6, "#3a3a48");
+  } else {
+    px(ctx, cx - 10, 21 + bob + p.armSwing, 5, 10, OUT);
+    px(ctx, cx - 9, 22 + bob + p.armSwing, 3, 8, GR);
+    px(ctx, cx + 4, 21 + bob - p.armSwing, 5, 10, OUT);
+    px(ctx, cx + 5, 22 + bob - p.armSwing, 3, 8, GR);
+    fist(cx - 10, 27 + bob + p.armSwing);
+    fist(cx + 4, 27 + bob - p.armSwing);
+  }
+  ctx.restore();
+}
+
 function paintLying(ctx, lk, P) {
   const flatHead = (hx, hy) => {
     box(ctx, hx, hy, 8, 7, P.skin);
-    px(ctx, hx, hy, 8, 2, P.hair);            // hair pressed to the floor
-    px(ctx, hx, hy + 3, 8, 2, P.eye);         // shut feat: eye band
+    px(ctx, hx, hy, 8, 2, P.hair);
+    px(ctx, hx, hy + 3, 8, 2, P.eye);
     px(ctx, hx + 2, hy + 3, 2, 1, P.eyeHi);
   };
   const flatLegs = (x0, y0) => {
     px(ctx, x0 - 1, y0 - 1, 14, 6, OUT);
-    px(ctx, x0, y0, 12, 4, P.pants);          // legs extended flat
+    px(ctx, x0, y0, 12, 4, P.pants);
     px(ctx, x0, y0, 12, 1, P.rim);
-    px(ctx, x0 + 12, y0 - 1, 5, 6, P.boot);   // boots
+    px(ctx, x0 + 12, y0 - 1, 5, 6, P.boot);
     px(ctx, x0 + 12, y0 - 1, 5, 1, P.bootHi);
   };
   const flatTorso = (x0, y0) => {
@@ -56,11 +175,11 @@ function paintLying(ctx, lk, P) {
     if (P.belt) px(ctx, x0 + 8, y0 + 1, 3, 4, P.belt);
   };
   if (P.cape) {
-    px(ctx, 5, 45, 22, 3, P.cape);            // cape pooled under the body
+    px(ctx, 5, 45, 22, 3, P.cape);
     px(ctx, 8, 46, 14, 1, "#6e0d0d");
   }
   if (lk === 0) {
-    // Stagger: upright, reeling back, arms flung up.
+
     leg(ctx, 12, 34, 12, P.pants, P.shade, P.boot, P.bootHi);
     leg(ctx, 19, 34, 12, P.pants, P.shade, P.boot, P.bootHi);
     box(ctx, 12, 17, 12, 17, P.torso);
@@ -71,7 +190,7 @@ function paintLying(ctx, lk, P) {
     px(ctx, 8, 4, 4, 12, OUT); px(ctx, 9, 5, 2, 10, P.torso); px(ctx, 9, 5, 2, 2, P.skin);
     px(ctx, 24, 4, 4, 12, OUT); px(ctx, 25, 5, 2, 10, P.torso); px(ctx, 25, 5, 2, 2, P.skin);
   } else if (lk === 1) {
-    // Tipping: knees buckled, torso sinking back, one arm windmilling.
+
     leg(ctx, 10, 38, 8, P.pants, P.shade, P.boot, P.bootHi);
     leg(ctx, 21, 38, 8, P.pants, P.shade, P.boot, P.bootHi);
     box(ctx, 11, 23, 12, 16, P.torso);
@@ -79,10 +198,10 @@ function paintLying(ctx, lk, P) {
     box(ctx, 11, 13, 10, 9, P.skin);
     px(ctx, 11, 13, 10, 3, P.hair);
     px(ctx, 11, 17, 10, 2, P.eye);
-    px(ctx, 24, 8, 8, 3, OUT); px(ctx, 25, 9, 6, 1, P.skin);   // flung arm
+    px(ctx, 24, 8, 8, 3, OUT); px(ctx, 25, 9, 6, 1, P.skin);
     arm(ctx, 6, 24, 5, 9, P.torso, P.shade, P.skin);
   } else if (lk === 2) {
-    // Collapse: body diagonal, head dropping toward the floor.
+
     px(ctx, 14, 30, 11, 6, OUT); px(ctx, 15, 31, 9, 4, P.torso);
     px(ctx, 11, 35, 11, 6, OUT); px(ctx, 12, 36, 9, 4, P.torso);
     px(ctx, 8, 39, 12, 6, OUT); px(ctx, 9, 40, 10, 4, P.torso);
@@ -91,31 +210,31 @@ function paintLying(ctx, lk, P) {
     px(ctx, 1, 38, 8, 2, P.hair);
     px(ctx, 1, 41, 8, 2, P.eye);
     flatLegs(20, 42);
-    px(ctx, 16, 32, 8, 3, OUT); px(ctx, 17, 33, 6, 1, P.skin); // trailing arm
+    px(ctx, 16, 32, 8, 3, OUT); px(ctx, 17, 33, 6, 1, P.skin);
   } else if (lk <= 7) {
-    // Flat-out: full body down, head on the floor.
+
     const breathe = lk === 6 ? -1 : 0;
     flatLegs(18, 44);
     flatTorso(9, 42 + breathe);
     flatHead(1, 41);
     if (lk === 3) {
-      // Slam frame: arm still in the air, stars of impact.
+
       px(ctx, 11, 33, 5, 9, OUT); px(ctx, 12, 34, 3, 7, P.torso);
       px(ctx, 11, 30, 5, 4, P.skin);
       px(ctx, 26, 38, 2, 2, "#ffffff");
       px(ctx, 29, 41, 2, 2, "#ffffff");
     } else if (lk === 5 || lk === 7) {
-      // Twitch: head lifts a pixel, fist clenches.
+
       px(ctx, 1, 40, 8, 1, P.skin);
       px(ctx, 10, 43, 8, 3, OUT); px(ctx, 11, 44, 6, 1, P.torso);
       px(ctx, 15, 43, 3, 3, P.skin);
     } else {
-      // Still: arm resting across the chest.
+
       px(ctx, 10, 44, 9, 3, OUT); px(ctx, 11, 45, 7, 1, P.torso);
       px(ctx, 16, 44, 3, 3, P.skin);
     }
   } else if (lk === 8) {
-    // Push-up: head up, one arm driving into the floor.
+
     flatLegs(20, 43);
     px(ctx, 10, 35, 10, 5, OUT); px(ctx, 11, 36, 8, 3, P.torso);
     px(ctx, 15, 38, 8, 5, OUT); px(ctx, 16, 39, 6, 3, P.torso);
@@ -124,19 +243,19 @@ function paintLying(ctx, lk, P) {
     px(ctx, 2, 36, 8, 2, P.eye);
     px(ctx, 12, 40, 4, 8, OUT); px(ctx, 13, 41, 2, 6, P.torso); px(ctx, 13, 45, 2, 3, P.skin);
   } else if (lk === 9) {
-    // Kneel: back knee down, torso up, hand braced on thigh.
-    px(ctx, 8, 43, 8, 4, OUT); px(ctx, 9, 44, 6, 2, P.pants);   // grounded knee
-    px(ctx, 18, 38, 9, 5, OUT); px(ctx, 19, 39, 7, 3, P.pants); // forward thigh
-    leg(ctx, 24, 36, 10, P.pants, P.shade, P.boot, P.bootHi);  // planted shin
+
+    px(ctx, 8, 43, 8, 4, OUT); px(ctx, 9, 44, 6, 2, P.pants);
+    px(ctx, 18, 38, 9, 5, OUT); px(ctx, 19, 39, 7, 3, P.pants);
+    leg(ctx, 24, 36, 10, P.pants, P.shade, P.boot, P.bootHi);
     box(ctx, 12, 24, 11, 15, P.torso);
     px(ctx, 12, 24, 2, 15, P.rim);
     if (P.belt) px(ctx, 12, 33, 11, 3, P.belt);
     box(ctx, 13, 14, 10, 9, P.skin);
     px(ctx, 13, 14, 10, 3, P.hair);
     px(ctx, 13, 18, 10, 2, P.eye);
-    px(ctx, 14, 30, 8, 3, OUT); px(ctx, 15, 31, 6, 1, P.torso); // braced arm
+    px(ctx, 14, 30, 8, 3, OUT); px(ctx, 15, 31, 6, 1, P.torso);
   } else if (lk === 10) {
-    // Crouch gather: folded low, about to stand.
+
     leg(ctx, 9, 40, 6, P.pants, P.shade, P.boot, P.bootHi);
     leg(ctx, 22, 40, 6, P.pants, P.shade, P.boot, P.bootHi);
     box(ctx, 12, 26, 12, 15, P.torso);
@@ -147,7 +266,7 @@ function paintLying(ctx, lk, P) {
     arm(ctx, 7, 28, 5, 9, P.torso, P.shade, P.skin);
     arm(ctx, 24, 28, 5, 9, P.torso, P.shade, P.skin);
   } else {
-    // Rise: near-standing, last hand leaving the knee.
+
     leg(ctx, 12, 35, 11, P.pants, P.shade, P.boot, P.bootHi);
     leg(ctx, 19, 35, 11, P.pants, P.shade, P.boot, P.bootHi);
     box(ctx, 12, 20, 12, 15, P.torso);
@@ -160,8 +279,6 @@ function paintLying(ctx, lk, P) {
   }
 }
 
-// Box with 1px outline: draws outline rect, then fill inset by 1 on left/right
-// (keeps silhouette readable against any background — M1 requirement).
 function box(ctx, x, y, w, h, fill, outline = OUT) {
   px(ctx, x - 1, y - 1, w + 2, h + 2, outline);
   px(ctx, x, y, w, h, fill);
@@ -169,167 +286,169 @@ function box(ctx, x, y, w, h, fill, outline = OUT) {
 
 function leg(ctx, x, yTop, h, main, dark, boot, bootHi) {
   const w = 5;
-  px(ctx, x - 1, yTop - 1, w + 2, h + 3, OUT); // outline incl. boot
-  px(ctx, x, yTop, w, h, main);                // leg
-  px(ctx, x + 3, yTop, 2, h, dark);            // shade on inner side
-  px(ctx, x, yTop + h - 2, w, 4, boot);        // boot
-  px(ctx, x, yTop + h - 2, w, 1, bootHi);      // boot shine
+  px(ctx, x - 1, yTop - 1, w + 2, h + 3, OUT);
+  px(ctx, x, yTop, w, h, main);
+  px(ctx, x + 3, yTop, 2, h, dark);
+  px(ctx, x, yTop + h - 2, w, 4, boot);
+  px(ctx, x, yTop + h - 2, w, 1, bootHi);
 }
 
 function arm(ctx, x, y, w, h, sleeve, sleeveDark, fist) {
   px(ctx, x - 1, y - 1, w + 2, h + 2, OUT);
   px(ctx, x, y, w, h, sleeve);
-  px(ctx, x, y, w, 1, sleeveDark); // top shade line (simple shading)
-  px(ctx, x + (w > 6 ? w - 3 : 0), y + h - 3, 3, 3, fist); // fist at end
+  px(ctx, x, y, w, 1, sleeveDark);
+  px(ctx, x + (w > 6 ? w - 3 : 0), y + h - 3, 3, 3, fist);
 }
 
-// ---- per-character painters ---------------------------------------------
 function paintWesker(ctx, p) {
   const cx = 18;
-  if (p.lying) { paintLying(ctx, p.lk || 0, LY_W); return; } // 12-frame knockdown
+  if (p.lying) { paintLying(ctx, p.lk || 0, LY_W); return; }
   const bob = p.bob;
-  const drop = (p.crouch ? 8 : 0) + (p.dip || 0); // crouch sink + slam fold-over
-  const lean = (p.dash ? 2 : 0) + (p.wind || 0);   // dash drive + windup coil / slam drive
-  // Back coat tails (behind legs) — long coat = Wesker silhouette.
+  const drop = (p.crouch ? 8 : 0) + (p.dip || 0);
+  const lean = (p.dash ? 2 : 0) + (p.wind || 0);
+
   const sway = p.coatSway;
   px(ctx, cx - 8 + sway, 30 + bob + drop, 6, 14, "#101018");
   px(ctx, cx + 2 - sway, 30 + bob + drop, 6, 14, "#101018");
-  px(ctx, cx - 8 + sway, 30 + bob + drop, 1, 14, "#33334d"); // rim light
+  px(ctx, cx - 8 + sway, 30 + bob + drop, 1, 14, "#33334d");
   px(ctx, cx + 7 - sway, 30 + bob + drop, 1, 14, "#33334d");
 
-  // Stance legs: stand / crouch-fold / air-tuck / dash-lunge.
-  // Boot bottoms stay on row 48 in every grounded stance (see FEET_PAD).
   const LM = "#14141c", LD = "#08080d", BT = "#000000", BH = "#3a3a4d";
   if (p.crouch) {
-    leg(ctx, cx - 9 + p.legL, 40 + bob, 6, LM, LD, BT, BH); // folded, wide base
+    leg(ctx, cx - 9 + p.legL, 40 + bob, 6, LM, LD, BT, BH);
     leg(ctx, cx + 4 + p.legR, 40 + bob, 6, LM, LD, BT, BH);
   } else if (p.air === 1) {
-    leg(ctx, cx - 6 + p.legL, 37 + bob, 7, LM, LD, BT, BH); // knees tucked (rise)
+    leg(ctx, cx - 6 + p.legL, 37 + bob, 7, LM, LD, BT, BH);
     leg(ctx, cx + 1 + p.legR, 39 + bob, 5, LM, LD, BT, BH);
   } else if (p.air === 2) {
-    leg(ctx, cx - 6 + p.legL, 34 + bob, 11, LM, LD, BT, BH); // reaching down (fall)
+    leg(ctx, cx - 6 + p.legL, 34 + bob, 11, LM, LD, BT, BH);
     leg(ctx, cx + 1 + p.legR, 35 + bob, 10, LM, LD, BT, BH);
   } else if (p.dash) {
-    leg(ctx, cx - 10, 36 + bob, 10, LM, LD, BT, BH); // lunge stance
+    leg(ctx, cx - 10, 36 + bob, 10, LM, LD, BT, BH);
     leg(ctx, cx + 4, 36 + bob, 10, LM, LD, BT, BH);
   } else if (p.guardWalk) {
-    // Block-retreat: narrow walk-cycle legs (not the wide brace base).
+
     leg(ctx, cx - 6 + (p.legL || 0), 34 + bob, 12, LM, LD, BT, BH);
     leg(ctx, cx + 1 + (p.legR || 0), 34 + bob, 12, LM, LD, BT, BH);
   } else if (p.brace) {
-    leg(ctx, cx - 9 + (p.legL || 0), 38 + bob, 8, LM, LD, BT, BH); // braced wide base for the slam
+    leg(ctx, cx - 9 + (p.legL || 0), 38 + bob, 8, LM, LD, BT, BH);
     leg(ctx, cx + 4 + (p.legR || 0), 38 + bob, 8, LM, LD, BT, BH);
   } else {
     leg(ctx, cx - 6 + p.legL, 34 + bob, 12, LM, LD, BT, BH);
     leg(ctx, cx + 1 + p.legR, 34 + bob, 12, LM, LD, BT, BH);
   }
   ctx.save();
-  ctx.translate(lean, drop); // shift torso + head + arms together
+  ctx.translate(lean, drop);
 
-  // Torso: dark coat, V shirt, buttons, high collar.
   box(ctx, cx - 6, 19 + bob, 12, 16, "#1b1b26");
-  px(ctx, cx - 6, 19 + bob, 2, 16, "#33334d");   // left rim light
-  px(ctx, cx + 4, 19 + bob, 2, 16, "#0c0c12");   // right shade
-  px(ctx, cx - 2, 20 + bob, 4, 9, "#0a0a10");    // black shirt V
-  px(ctx, cx - 1, 22 + bob, 2, 6, "#23232f");    // shirt fold
-  px(ctx, cx - 6, 16 + bob, 12, 4, "#101018");   // high collar
-  px(ctx, cx - 6, 16 + bob, 12, 1, "#3d3d5c");   // collar highlight
-  // Coat front edges
+  px(ctx, cx - 6, 19 + bob, 2, 16, "#33334d");
+  px(ctx, cx + 4, 19 + bob, 2, 16, "#0c0c12");
+  px(ctx, cx - 2, 20 + bob, 4, 9, "#0a0a10");
+  px(ctx, cx - 1, 22 + bob, 2, 6, "#23232f");
+  px(ctx, cx - 6, 16 + bob, 12, 4, "#101018");
+  px(ctx, cx - 6, 16 + bob, 12, 1, "#3d3d5c");
+
   px(ctx, cx - 5, 24 + bob, 1, 11, "#3a3a55");
   px(ctx, cx + 4, 24 + bob, 1, 11, "#000000");
 
-  // Head: skin + blond crop + sunglasses (signature).
-  // NOTE: hy rides `bob` (body motion) PLUS headBob (relative nod). An old
-  // revision used headBob alone, which opened a 1px neck gap on every
-  // bob=1 frame (idle/walk bobbing) — the "floating head" bug.
   const hy = 7 + bob + (p.headBob || 0);
   box(ctx, cx - 5, hy, 10, 9, "#e6b48c");
-  px(ctx, cx + 3, hy, 2, 9, "#b98a63");          // face shade (light from left)
-  px(ctx, cx - 5, hy, 10, 3, "#c8a45e");        // short blond hair
-  px(ctx, cx - 5, hy + 2, 2, 3, "#c8a45e");     // sideburns
+  px(ctx, cx + 3, hy, 2, 9, "#b98a63");
+  px(ctx, cx - 5, hy, 10, 3, "#c8a45e");
+  px(ctx, cx - 5, hy + 2, 2, 3, "#c8a45e");
   px(ctx, cx + 3, hy + 2, 2, 3, "#c8a45e");
-  // Sunglasses bar + red glint (Wesker signature)
-  if (p.unmasked) {
-    // RAGE MODE: sunglasses torn away, Uroboros infection burning red.
-    px(ctx, cx - 5, hy + 4, 10, 2, "#7a1010");     // inflamed eye band
-    px(ctx, cx - 4, hy + 4, 3, 2, "#ff2a2a");      // burning eyes
+
+  if (p.madFace) {
+
+    px(ctx, cx - 5, hy + 3, 4, 1, "#3d0a0a");
+    px(ctx, cx + 1, hy + 3, 4, 1, "#3d0a0a");
+    px(ctx, cx - 4, hy + 4, 3, 1, "#5a0d0d");
+    px(ctx, cx + 1, hy + 4, 3, 1, "#5a0d0d");
+    px(ctx, cx - 4, hy + 4, 3, 2, "#ff3b1a");
+    px(ctx, cx + 1, hy + 4, 3, 2, "#ff3b1a");
+    px(ctx, cx - 3, hy + 4, 1, 1, "#ffd27a");
+    px(ctx, cx + 2, hy + 4, 1, 1, "#ffd27a");
+    px(ctx, cx - 5, hy + 7, 10, 1, "#5a0d0d");
+    px(ctx, cx - 3, hy + 7, 6, 1, "#2a0505");
+  } else if (p.unmasked) {
+
+    px(ctx, cx - 5, hy + 4, 10, 2, "#7a1010");
+    px(ctx, cx - 4, hy + 4, 3, 2, "#ff2a2a");
     px(ctx, cx + 1, hy + 4, 3, 2, "#ff2a2a");
-    px(ctx, cx - 4, hy + 4, 3, 1, "#ffd0d0");      // hot glints
+    px(ctx, cx - 4, hy + 4, 3, 1, "#ffd0d0");
     px(ctx, cx + 1, hy + 4, 3, 1, "#ffd0d0");
-    px(ctx, cx - 5, hy + 7, 10, 1, "#5a0d0d");     // dark veins below
+    px(ctx, cx - 5, hy + 7, 10, 1, "#5a0d0d");
   } else {
     px(ctx, cx - 5, hy + 4, 10, 3, "#0b0b10");
     px(ctx, cx - 5, hy + 4, 10, 1, "#3a3a4d");
-    px(ctx, cx + 1, hy + 5, 2, 1, "#ff3030");     // glint
+    px(ctx, cx + 1, hy + 5, 2, 1, "#ff3030");
   }
-  px(ctx, cx - 3, hy + 8, 4, 1, "#a87c58");     // mouth shadow
+  px(ctx, cx - 3, hy + 8, 4, 1, "#a87c58");
 
-  // Arms depend on pose.
   if (p.tackle) {
-    // Jaguar Charge: shoulder dropped low, lead arm swept back for speed.
+
     px(ctx, cx + 0, 24 + bob, 12, 7, OUT);
     px(ctx, cx + 1, 25 + bob, 10, 5, "#1b1b26");
     px(ctx, cx + 1, 25 + bob, 10, 1, "#33334d");
-    px(ctx, cx + 8, 25 + bob, 4, 5, "#4a3320");      // tucked fist
-    px(ctx, cx - 8, 22 + bob, 8, 2, "#9fd4ff");      // back-swept speed lines
+    px(ctx, cx + 8, 25 + bob, 4, 5, "#4a3320");
+    px(ctx, cx - 8, 22 + bob, 8, 2, "#9fd4ff");
     px(ctx, cx - 10, 25 + bob, 10, 2, "#3a6a9f");
     arm(ctx, cx - 9, 21 + bob, 5, 10, "#1b1b26", "#0c0c12", "#4a3320");
   } else if (p.unmaskMid) {
-    // RAGE transform beat 2: hand tearing glasses away, head snapped back.
+
     px(ctx, cx + 3, 10 + bob, 6, 12, OUT);
     px(ctx, cx + 4, 11 + bob, 4, 10, "#1b1b26");
-    px(ctx, cx + 4, 17 + bob, 4, 4, "#4a3320");      // ripping fist at face
-    px(ctx, cx + 4, 11 + bob, 4, 1, "#ff3030");      // torn-glasses glint
-    px(ctx, cx - 8, 22 + bob, 2, 8, "#ff3b1a");      // first ember streaks
+    px(ctx, cx + 4, 17 + bob, 4, 4, "#4a3320");
+    px(ctx, cx + 4, 11 + bob, 4, 1, "#ff3030");
+    px(ctx, cx - 8, 22 + bob, 2, 8, "#ff3b1a");
     px(ctx, cx - 5, 24 + bob, 2, 6, "#ffb13e");
     arm(ctx, cx - 9, 22 + bob, 5, 9, "#1b1b26", "#0c0c12", "#4a3320");
   } else if (p.leap) {
-    // RAGE rise: skyward leap, both fists punched down, coat flared wide.
+
     px(ctx, cx - 8, 26 + bob, 6, 10, OUT);
     px(ctx, cx - 7, 27 + bob, 4, 8, "#1b1b26");
     px(ctx, cx - 7, 33 + bob, 4, 3, "#4a3320");
     px(ctx, cx + 3, 26 + bob, 6, 10, OUT);
     px(ctx, cx + 4, 27 + bob, 4, 8, "#1b1b26");
     px(ctx, cx + 4, 33 + bob, 4, 3, "#4a3320");
-    px(ctx, cx - 11, 18 + bob, 3, 12, "#9fd4ff");    // liftoff speed lines
+    px(ctx, cx - 11, 18 + bob, 3, 12, "#9fd4ff");
     px(ctx, cx + 8, 18 + bob, 3, 12, "#3a6a9f");
   } else if (p.hover) {
-    // RAGE aim: hanging at apex, arms spread wide calling the missile down.
+
     px(ctx, cx - 13, 14 + bob, 6, 10, OUT);
     px(ctx, cx - 12, 15 + bob, 4, 8, "#1b1b26");
     px(ctx, cx - 12, 15 + bob, 4, 2, "#4a3320");
     px(ctx, cx + 8, 14 + bob, 6, 10, OUT);
     px(ctx, cx + 9, 15 + bob, 4, 8, "#1b1b26");
     px(ctx, cx + 9, 15 + bob, 4, 2, "#4a3320");
-    px(ctx, cx - 2, 8 + bob, 4, 4, "#ff3b1a");       // signal glint overhead
+    px(ctx, cx - 2, 8 + bob, 4, 4, "#ff3b1a");
   } else if (p.carry) {
-    // RAGE drop: missile gripped overhead in both fists, body stretched.
+
     px(ctx, cx - 10, 8 + bob, 6, 14, OUT);
     px(ctx, cx - 9, 9 + bob, 4, 12, "#1b1b26");
-    px(ctx, cx - 9, 9 + bob, 4, 3, "#4a3320");       // left fist overhead
+    px(ctx, cx - 9, 9 + bob, 4, 3, "#4a3320");
     px(ctx, cx + 5, 8 + bob, 6, 14, OUT);
     px(ctx, cx + 6, 9 + bob, 4, 12, "#1b1b26");
-    px(ctx, cx + 6, 9 + bob, 4, 3, "#4a3320");       // right fist overhead
-    px(ctx, cx - 5, 4 + bob, 10, 3, "#1a1a20");      // missile tail between fists
-    px(ctx, cx - 5, 4 + bob, 10, 1, "#ff7a1a");      // hot grip glint
+    px(ctx, cx + 6, 9 + bob, 4, 3, "#4a3320");
+    px(ctx, cx - 5, 4 + bob, 10, 3, "#1a1a20");
+    px(ctx, cx - 5, 4 + bob, 10, 1, "#ff7a1a");
   } else if (p.seize) {
-    // Grab reach: both arms shot forward at chest height, deep lean-in.
+
     px(ctx, cx - 2, 21 + bob, 12, 4, OUT);
     px(ctx, cx - 1, 22 + bob, 10, 2, "#1b1b26");
-    px(ctx, cx + 7, 21 + bob, 4, 4, "#4a3320");    // open hands
-    px(ctx, cx - 6, 23 + bob, 6, 8, "#1b1b26");    // rear guard arm
+    px(ctx, cx + 7, 21 + bob, 4, 4, "#4a3320");
+    px(ctx, cx - 6, 23 + bob, 6, 8, "#1b1b26");
     px(ctx, cx - 6, 28 + bob, 5, 3, "#4a3320");
   } else if (p.guard === 1) {
-    // MVC3 one-hand stand guard: lead forearm snapped vertical in front of
-    // the face, fist up; rear hand chambered low at the hip, elbow in.
+
     px(ctx, cx + 2, 17 + bob, 6, 14, OUT);
     px(ctx, cx + 3, 18 + bob, 4, 12, "#1b1b26");
-    px(ctx, cx + 3, 18 + bob, 4, 1, "#33334d");      // forearm rim light
-    px(ctx, cx + 3, 16 + bob, 4, 4, "#4a3320");      // raised lead fist
-    px(ctx, cx + 3, 16 + bob, 4, 1, "#8a6540");      // knuckle light
-    arm(ctx, cx - 9, 24 + bob, 5, 7, "#1b1b26", "#0c0c12", "#4a3320"); // rear fist at hip
+    px(ctx, cx + 3, 18 + bob, 4, 1, "#33334d");
+    px(ctx, cx + 3, 16 + bob, 4, 4, "#4a3320");
+    px(ctx, cx + 3, 16 + bob, 4, 1, "#8a6540");
+    arm(ctx, cx - 9, 24 + bob, 5, 7, "#1b1b26", "#0c0c12", "#4a3320");
   } else if (p.guard === 2) {
-    // Crouch guard: low cross over the knees (body already dropped).
+
     px(ctx, cx - 8, 22 + bob, 14, 8, OUT);
     px(ctx, cx - 7, 23 + bob, 12, 2, "#1b1b26");
     px(ctx, cx - 7, 27 + bob, 12, 2, "#23232f");
@@ -337,94 +456,92 @@ function paintWesker(ctx, p) {
     px(ctx, cx + 4, 23 + bob, 3, 6, "#4a3320");
     px(ctx, cx - 7, 23 + bob, 12, 1, "#33334d");
   } else if (p.windup) {
-    // Anticipation: fists chambered at the chest, weight shifted back.
+
     px(ctx, cx - 9, 19 + bob, 7, 11, OUT);
     px(ctx, cx - 8, 20 + bob, 5, 9, "#1b1b26");
-    px(ctx, cx - 8, 20 + bob, 5, 4, "#4a3320");    // chambered fist
+    px(ctx, cx - 8, 20 + bob, 5, 4, "#4a3320");
     px(ctx, cx + 2, 21 + bob, 7, 11, OUT);
     px(ctx, cx + 3, 22 + bob, 5, 9, "#1b1b26");
     px(ctx, cx + 3, 22 + bob, 5, 4, "#8a6540");
   } else if (p.slam) {
-    // Heavy payoff: both arms crashed down-forward, torso folded over.
+
     px(ctx, cx - 2, 24 + bob, 14, 6, OUT);
     px(ctx, cx - 1, 25 + bob, 12, 4, "#1b1b26");
-    px(ctx, cx + 7, 25 + bob, 5, 5, "#4a3320");    // joined fists, low
+    px(ctx, cx + 7, 25 + bob, 5, 5, "#4a3320");
     px(ctx, cx + 7, 25 + bob, 5, 1, "#8a6540");
-    px(ctx, cx + 2, 12 + bob, 2, 10, "#9fd4ff");   // downward speed lines
+    px(ctx, cx + 2, 12 + bob, 2, 10, "#9fd4ff");
     px(ctx, cx + 6, 14 + bob, 2, 8, "#3a6a9f");
   } else if (p.overhead) {
-    // Heavy overhead smash: both fists raised high, body coiled.
+
     px(ctx, cx - 9, 8 + bob, 7, 14, OUT);
     px(ctx, cx - 8, 9 + bob, 5, 12, "#1b1b26");
-    px(ctx, cx - 8, 9 + bob, 5, 3, "#4a3320");    // raised fists
+    px(ctx, cx - 8, 9 + bob, 5, 3, "#4a3320");
     px(ctx, cx + 2, 10 + bob, 7, 14, OUT);
     px(ctx, cx + 3, 11 + bob, 5, 12, "#1b1b26");
-    px(ctx, cx + 3, 11 + bob, 5, 1, "#8a6540");   // knuckle light
+    px(ctx, cx + 3, 11 + bob, 5, 1, "#8a6540");
   } else if (p.punch > 0) {
-    // Punching arm extended toward +x (flip handles facing).
+
     arm(ctx, cx - 9, 21 + bob, 5, 10, "#1b1b26", "#0c0c12", "#4a3320");
     const ex = cx + 6, ey = 22 + bob - p.punch;
     px(ctx, ex - 1, ey - 1, 12, 5, OUT);
     px(ctx, ex, ey, 11, 3, "#1b1b26");
-    px(ctx, ex + 8, ey - 1, 4, 5, "#4a3320");   // fist
-    px(ctx, ex + 8, ey - 1, 4, 1, "#8a6540");   // knuckle light
-    // Speed streak pixels (impact readability, animated later in M14)
+    px(ctx, ex + 8, ey - 1, 4, 5, "#4a3320");
+    px(ctx, ex + 8, ey - 1, 4, 1, "#8a6540");
+
     px(ctx, ex - 4, ey + 1, 3, 1, "#9fd4ff");
   } else if (p.kick > 0) {
     arm(ctx, cx - 9, 21 + bob, 5, 10, "#1b1b26", "#0c0c12", "#4a3320");
     arm(ctx, cx + 4, 21 + bob, 5, 10, "#1b1b26", "#0c0c12", "#4a3320");
-    // Extended kick leg drawn over base legs
+
     px(ctx, cx + 2, 36 + bob, 13, 5, "#14141c");
     px(ctx, cx + 2, 36 + bob, 13, 1, "#33334d");
     px(ctx, cx + 11, 35 + bob, 4, 6, "#000000");
   } else if (p.palm) {
-    // Open-hand thrust: arm extended, flat blade-hand, short snap streak.
+
     arm(ctx, cx - 9, 21 + bob, 5, 10, "#1b1b26", "#0c0c12", "#4a3320");
     px(ctx, cx + 6, 21 + bob - 1, 10, 4, OUT);
     px(ctx, cx + 7, 22 + bob - 1, 8, 2, "#1b1b26");
-    px(ctx, cx + 13, 22 + bob - 1, 3, 2, "#e6b48c");   // edge of the hand
+    px(ctx, cx + 13, 22 + bob - 1, 3, 2, "#e6b48c");
     px(ctx, cx + 3, 22 + bob, 3, 1, "#9fd4ff");
   } else if (p.elbow) {
-    // Close elbow: arm folded tight, body sunk over it for the smash.
+
     px(ctx, cx - 4, 22 + bob, 10, 6, OUT);
     px(ctx, cx - 3, 23 + bob, 8, 4, "#1b1b26");
-    px(ctx, cx + 3, 23 + bob, 3, 4, "#4a3320");        // elbow point forward
+    px(ctx, cx + 3, 23 + bob, 3, 4, "#4a3320");
     arm(ctx, cx - 9, 21 + bob, 5, 10, "#1b1b26", "#0c0c12", "#4a3320");
   } else if (p.backfist) {
-    // High backfist: arm whipped up-across, fist at full height.
+
     px(ctx, cx + 1, 8 + bob, 6, 15, OUT);
     px(ctx, cx + 2, 9 + bob, 4, 13, "#1b1b26");
-    px(ctx, cx + 2, 9 + bob, 4, 4, "#4a3320");         // fist at apex
+    px(ctx, cx + 2, 9 + bob, 4, 4, "#4a3320");
     arm(ctx, cx - 9, 22 + bob, 5, 9, "#1b1b26", "#0c0c12", "#4a3320");
-    px(ctx, cx - 2, 12 + bob, 2, 6, "#9fd4ff");        // upward arc streak
+    px(ctx, cx - 2, 12 + bob, 2, 6, "#9fd4ff");
   } else if (p.cobra) {
-    // COBRA STRIKE: knife-hand speared dead level, whole body behind it.
+
     px(ctx, cx + 2, 20 + bob, 16, 5, OUT);
     px(ctx, cx + 3, 21 + bob, 14, 3, "#1b1b26");
     px(ctx, cx + 3, 21 + bob, 14, 1, "#33334d");
-    px(ctx, cx + 15, 21 + bob, 3, 3, "#e6b48c");       // blade-hand tip
-    px(ctx, cx + 15, 22 + bob, 3, 1, "#ff3030");       // Wesker red glint
-    px(ctx, cx - 3, 22 + bob, 5, 1, "#9fd4ff");        // drive streaks
+    px(ctx, cx + 15, 21 + bob, 3, 3, "#e6b48c");
+    px(ctx, cx + 15, 22 + bob, 3, 1, "#ff3030");
+    px(ctx, cx - 3, 22 + bob, 5, 1, "#9fd4ff");
     px(ctx, cx - 5, 24 + bob, 7, 1, "#3a6a9f");
     arm(ctx, cx - 9, 22 + bob, 5, 9, "#1b1b26", "#0c0c12", "#4a3320");
   } else if (p.gun) {
-    // SAMURAI EDGE: both arms punched forward, pistol leveled at chest
-    // height. Canvas is 36px wide (cx=18) — muzzle glint sits at cx+16..17
-    // so the tip stays inside the frame before the 3x upscale.
+
     arm(ctx, cx - 9, 21 + bob, 5, 10, "#1b1b26", "#0c0c12", "#4a3320");
-    px(ctx, cx + 2, 20 + bob, 16, 7, OUT);             // arms+gun outline block
-    px(ctx, cx + 3, 21 + bob, 9, 5, "#1b1b26");        // extended sleeves
-    px(ctx, cx + 3, 21 + bob, 9, 1, "#33334d");        // rim light
-    px(ctx, cx + 11, 21 + bob, 7, 4, OUT);             // slide outline
-    px(ctx, cx + 12, 22 + bob, 5, 2, "#9a9ab0");       // steel slide
-    px(ctx, cx + 12, 24 + bob, 3, 2, "#3a2a1a");       // grip under slide
-    px(ctx, cx + 16, 22 + bob, 2, 1, "#ffd23e");       // muzzle glint
-    px(ctx, cx - 4, 24 + bob, 6, 4, "#4a3320");        // support hand
+    px(ctx, cx + 2, 20 + bob, 16, 7, OUT);
+    px(ctx, cx + 3, 21 + bob, 9, 5, "#1b1b26");
+    px(ctx, cx + 3, 21 + bob, 9, 1, "#33334d");
+    px(ctx, cx + 11, 21 + bob, 7, 4, OUT);
+    px(ctx, cx + 12, 22 + bob, 5, 2, "#9a9ab0");
+    px(ctx, cx + 12, 24 + bob, 3, 2, "#3a2a1a");
+    px(ctx, cx + 16, 22 + bob, 2, 1, "#ffd23e");
+    px(ctx, cx - 4, 24 + bob, 6, 4, "#4a3320");
   } else {
     arm(ctx, cx - 9, 21 + bob + p.armSwing, 5, 10, "#1b1b26", "#0c0c12", "#4a3320");
     arm(ctx, cx + 4, 21 + bob - p.armSwing, 5, 10, "#1b1b26", "#0c0c12", "#4a3320");
     if (p.dash) {
-      // Motion streaks trailing behind the dash (local -x = behind).
+
       px(ctx, cx - 13, 24 + bob, 4, 1, "#9fd4ff");
       px(ctx, cx - 15, 27 + bob, 6, 1, "#3a6a9f");
     }
@@ -434,20 +551,19 @@ function paintWesker(ctx, p) {
 
 function paintHomelander(ctx, p) {
   const cx = 18;
-  if (p.lying) { paintLying(ctx, p.lk || 0, LY_H); return; } // 12-frame knockdown
+  if (p.lying) { paintLying(ctx, p.lk || 0, LY_H); return; }
   const bob = p.bob;
   const drop = (p.crouch ? 8 : 0) + (p.dip || 0);
   const lean = (p.dash ? 2 : 0) + (p.wind || 0);
-  // Cape behind everything — big red shape = Homelander silhouette.
+
   const wv = p.capeWave;
-  px(ctx, cx - 10 + wv, 16 + bob + drop, 5, 28, "#6e0d0d");   // inner shade
-  px(ctx, cx - 5 + wv, 16 + bob + drop, 12, 28, "#a01313");   // main cape
-  px(ctx, cx + 7 + wv, 16 + bob + drop, 1, 28, "#e05050");    // rim light edge
+  px(ctx, cx - 10 + wv, 16 + bob + drop, 5, 28, "#6e0d0d");
+  px(ctx, cx - 5 + wv, 16 + bob + drop, 12, 28, "#a01313");
+  px(ctx, cx + 7 + wv, 16 + bob + drop, 1, 28, "#e05050");
   for (let i = 0; i < 5; i++) {
-    px(ctx, cx - 5 + wv + (i % 2), 20 + bob + drop + i * 5, 10 - i, 1, "#6e0d0d"); // folds
+    px(ctx, cx - 5 + wv + (i % 2), 20 + bob + drop + i * 5, 10 - i, 1, "#6e0d0d");
   }
 
-  // Stance legs: blue suit + red boots (same stance logic as Wesker).
   const LM = "#2043e0", LD = "#152c96", BT = "#a01313", BH = "#e05050";
   if (p.crouch) {
     leg(ctx, cx - 9 + p.legL, 40 + bob, 6, LM, LD, BT, BH);
@@ -462,7 +578,7 @@ function paintHomelander(ctx, p) {
     leg(ctx, cx - 10, 36 + bob, 10, LM, LD, BT, BH);
     leg(ctx, cx + 4, 36 + bob, 10, LM, LD, BT, BH);
   } else if (p.guardWalk) {
-    // Block-retreat: narrow walk-cycle legs (not the wide brace base).
+
     leg(ctx, cx - 6 + (p.legL || 0), 34 + bob, 12, LM, LD, BT, BH);
     leg(ctx, cx + 1 + (p.legR || 0), 34 + bob, 12, LM, LD, BT, BH);
   } else if (p.brace) {
@@ -475,44 +591,41 @@ function paintHomelander(ctx, p) {
   ctx.save();
   ctx.translate(lean, drop);
 
-  // Torso: bright blue suit, muscle shading, gold belt + eagle.
-  box(ctx, cx - 7, 19 + bob, 14, 16, "#2043e0");       // broader shoulders
-  px(ctx, cx - 7, 19 + bob, 3, 16, "#6f86ff");         // left highlight
-  px(ctx, cx + 4, 19 + bob, 3, 16, "#152c96");         // right shade
-  px(ctx, cx - 2, 21 + bob, 4, 5, "#6f86ff");          // chest light
-  // Chest eagle (gold) + white wing accents
+  box(ctx, cx - 7, 19 + bob, 14, 16, "#2043e0");
+  px(ctx, cx - 7, 19 + bob, 3, 16, "#6f86ff");
+  px(ctx, cx + 4, 19 + bob, 3, 16, "#152c96");
+  px(ctx, cx - 2, 21 + bob, 4, 5, "#6f86ff");
+
   px(ctx, cx - 2, 23 + bob, 4, 2, "#ffd23e");
   px(ctx, cx - 4, 23 + bob, 2, 1, "#ffffff");
   px(ctx, cx + 2, 23 + bob, 2, 1, "#ffffff");
-  // Belt
+
   px(ctx, cx - 7, 31 + bob, 14, 3, "#ffd23e");
   px(ctx, cx - 1, 31 + bob, 3, 3, "#fff2a8");
-  // Shoulder stars (white details)
+
   px(ctx, cx - 6, 20 + bob, 2, 2, "#ffffff");
   px(ctx, cx + 4, 20 + bob, 2, 2, "#ffffff");
 
-  // Head: skin + swept blond hair. (Same bob-riding hy as Wesker — see note
-  // there. headBob is only the extra nod on top of body motion.)
   const hy = 7 + bob + (p.headBob || 0);
   box(ctx, cx - 5, hy, 10, 9, "#f2c9a0");
   px(ctx, cx + 3, hy, 2, 9, "#c89868");
-  px(ctx, cx - 5, hy - 1, 10, 3, "#d9b45f");           // hair cap
-  px(ctx, cx + 1, hy - 1, 5, 1, "#f4dd9a");            // shine
-  px(ctx, cx - 5, hy + 2, 1, 4, "#d9b45f");            // side fringe
-  px(ctx, cx - 3, hy + 4, 2, 2, "#ffffff");            // eyes
+  px(ctx, cx - 5, hy - 1, 10, 3, "#d9b45f");
+  px(ctx, cx + 1, hy - 1, 5, 1, "#f4dd9a");
+  px(ctx, cx - 5, hy + 2, 1, 4, "#d9b45f");
+  px(ctx, cx - 3, hy + 4, 2, 2, "#ffffff");
   px(ctx, cx + 1, hy + 4, 2, 2, "#ffffff");
   px(ctx, cx - 3, hy + 5, 1, 1, "#1a3fd4");
   px(ctx, cx + 1, hy + 5, 1, 1, "#1a3fd4");
   if (p.lase) {
-    // Searing heat-vision pupils over the base eyes.
+
     px(ctx, cx - 3, hy + 4, 2, 2, "#ffffff");
     px(ctx, cx + 1, hy + 4, 2, 2, "#ffffff");
     px(ctx, cx - 3, hy + 5, 2, 1, "#ff3b1a");
     px(ctx, cx + 1, hy + 5, 2, 1, "#ff3b1a");
   }
-  px(ctx, cx - 2, hy + 8, 4, 1, "#a8764e");            // confident smirk
+  px(ctx, cx - 2, hy + 8, 4, 1, "#a8764e");
   if (p.strain) {
-    // Herculean effort (throw): brows down, teeth bared.
+
     px(ctx, cx - 4, hy + 3, 4, 1, "#8a6a2a");
     px(ctx, cx + 0, hy + 3, 4, 1, "#8a6a2a");
     px(ctx, cx - 3, hy + 8, 6, 2, "#ffffff");
@@ -520,7 +633,7 @@ function paintHomelander(ctx, p) {
     px(ctx, cx + 0, hy + 8, 1, 2, "#a8764e");
     px(ctx, cx + 2, hy + 8, 1, 2, "#a8764e");
   } else if (p.shout) {
-    // Head thrown back: brow high, throat dropped wide open.
+
     px(ctx, cx - 3, hy + 1, 6, 1, "#d9b45f");
     px(ctx, cx - 3, hy + 7, 6, 4, "#3a0d0d");
     px(ctx, cx - 3, hy + 7, 6, 1, "#ffffff");
@@ -528,7 +641,7 @@ function paintHomelander(ctx, p) {
   }
 
   if (p.strain) {
-    // Both arms driving down-forward for the toss.
+
     px(ctx, cx - 9, 23 + bob, 6, 11, OUT);
     px(ctx, cx - 8, 24 + bob, 4, 9, "#2043e0");
     px(ctx, cx - 8, 30 + bob, 4, 3, "#f2c9a0");
@@ -536,24 +649,24 @@ function paintHomelander(ctx, p) {
     px(ctx, cx + 4, 24 + bob, 4, 9, "#2043e0");
     px(ctx, cx + 4, 30 + bob, 4, 3, "#f2c9a0");
   } else if (p.charge) {
-    // LASER charge: head ducked, eyes dim kindling, arms braced back.
+
     px(ctx, cx - 2, 22 + bob, 10, 5, OUT);
     px(ctx, cx - 1, 23 + bob, 8, 3, "#152c96");
-    px(ctx, cx + 5, 23 + bob, 3, 3, "#7a1a1a");       // dim pre-glow
+    px(ctx, cx + 5, 23 + bob, 3, 3, "#7a1a1a");
     px(ctx, cx - 6, 25 + bob, 5, 8, "#2043e0");
     px(ctx, cx - 6, 31 + bob, 4, 2, "#f2c9a0");
-    px(ctx, cx - 4, 14 + bob, 2, 6, "#ffb13e");       // gathering sparks
+    px(ctx, cx - 4, 14 + bob, 2, 6, "#ffb13e");
   } else if (p.inhale) {
-    // SCREAM inhale: chest swelled, arms cocked back, head tipped up.
+
     px(ctx, cx - 12, 22 + bob, 6, 10, OUT);
     px(ctx, cx - 11, 23 + bob, 4, 8, "#152c96");
     px(ctx, cx + 6, 22 + bob, 6, 10, OUT);
     px(ctx, cx + 7, 23 + bob, 4, 8, "#152c96");
     px(ctx, cx - 2, 20 + bob, 8, 4, OUT);
-    px(ctx, cx - 1, 21 + bob, 6, 2, "#6f86ff");       // swelled chest light
+    px(ctx, cx - 1, 21 + bob, 6, 2, "#6f86ff");
     px(ctx, cx - 2, 22 + bob, 8, 2, "#ffd23e");
   } else if (p.ascend) {
-    // H-RAGE ascend: cape flared full-spread, eyes ignited, fists clenched.
+
     px(ctx, cx - 13 + wv, 16 + bob + drop, 4, 26, "#6e0d0d");
     px(ctx, cx + 9 + wv, 16 + bob + drop, 4, 26, "#a01313");
     px(ctx, cx + 9 + wv, 16 + bob + drop, 1, 26, "#e05050");
@@ -568,36 +681,35 @@ function paintHomelander(ctx, p) {
     px(ctx, cx + 4, 24 + bob, 4, 8, "#2043e0");
     px(ctx, cx + 4, 30 + bob, 4, 2, "#f2c9a0");
   } else if (p.lase) {
-    // HEAT VISION: head thrust forward, eyes white-hot with red halo.
-    // (M11 — the glow reserved for his specials starts here.)
+
     px(ctx, cx - 2, 20 + bob, 10, 5, OUT);
     px(ctx, cx - 1, 21 + bob, 8, 3, "#2043e0");
-    px(ctx, cx + 5, 21 + bob, 4, 3, "#ff3b1a");        // halo
-    px(ctx, cx + 6, 22 + bob, 3, 2, "#ffffff");        // burning pupils
-    px(ctx, cx - 6, 23 + bob, 5, 8, "#2043e0");        // braced arm back
+    px(ctx, cx + 5, 21 + bob, 4, 3, "#ff3b1a");
+    px(ctx, cx + 6, 22 + bob, 3, 2, "#ffffff");
+    px(ctx, cx - 6, 23 + bob, 5, 8, "#2043e0");
     px(ctx, cx - 6, 29 + bob, 4, 2, "#f2c9a0");
   } else if (p.shout) {
-    // SONIC SCREAM: head thrown back, jaw wide, arms flung open.
+
     px(ctx, cx - 12, 20 + bob, 6, 10, OUT);
     px(ctx, cx - 11, 21 + bob, 4, 8, "#2043e0");
     px(ctx, cx - 11, 27 + bob, 4, 2, "#f2c9a0");
     px(ctx, cx + 6, 20 + bob, 6, 10, OUT);
     px(ctx, cx + 7, 21 + bob, 4, 8, "#2043e0");
     px(ctx, cx + 7, 27 + bob, 4, 2, "#f2c9a0");
-    px(ctx, cx - 2, 22 + bob, 8, 2, "#ffd23e");        // chest eagle lit
+    px(ctx, cx - 2, 22 + bob, 8, 2, "#ffd23e");
   } else if (p.seize) {
     px(ctx, cx - 3, 21 + bob, 12, 4, OUT);
     px(ctx, cx - 2, 22 + bob, 10, 2, "#2043e0");
-    px(ctx, cx + 6, 21 + bob, 4, 4, "#f2c9a0");    // open hands
-    px(ctx, cx - 7, 23 + bob, 6, 8, "#2043e0");    // rear guard arm
+    px(ctx, cx + 6, 21 + bob, 4, 4, "#f2c9a0");
+    px(ctx, cx - 7, 23 + bob, 6, 8, "#2043e0");
     px(ctx, cx - 7, 28 + bob, 5, 3, "#2043e0");
   } else if (p.guard === 1) {
-    // MVC3 one-hand stand guard: lead forearm vertical before the face.
+
     px(ctx, cx + 1, 17 + bob, 6, 14, OUT);
     px(ctx, cx + 2, 18 + bob, 4, 12, "#2043e0");
-    px(ctx, cx + 2, 18 + bob, 4, 1, "#6f86ff");      // suit highlight
-    px(ctx, cx + 2, 16 + bob, 4, 4, "#f2c9a0");      // raised lead fist
-    arm(ctx, cx - 10, 24 + bob, 5, 7, "#2043e0", "#152c96", "#2043e0"); // rear fist at hip
+    px(ctx, cx + 2, 18 + bob, 4, 1, "#6f86ff");
+    px(ctx, cx + 2, 16 + bob, 4, 4, "#f2c9a0");
+    arm(ctx, cx - 10, 24 + bob, 5, 7, "#2043e0", "#152c96", "#2043e0");
   } else if (p.guard === 2) {
     px(ctx, cx - 9, 22 + bob, 14, 8, OUT);
     px(ctx, cx - 8, 23 + bob, 12, 2, "#2043e0");
@@ -608,21 +720,21 @@ function paintHomelander(ctx, p) {
   } else if (p.windup) {
     px(ctx, cx - 10, 19 + bob, 7, 11, OUT);
     px(ctx, cx - 9, 20 + bob, 5, 9, "#2043e0");
-    px(ctx, cx - 9, 20 + bob, 5, 4, "#f2c9a0");    // chambered fist
+    px(ctx, cx - 9, 20 + bob, 5, 4, "#f2c9a0");
     px(ctx, cx + 3, 21 + bob, 7, 11, OUT);
     px(ctx, cx + 4, 22 + bob, 5, 9, "#2043e0");
     px(ctx, cx + 4, 22 + bob, 5, 4, "#6f86ff");
   } else if (p.slam) {
     px(ctx, cx - 3, 24 + bob, 14, 6, OUT);
     px(ctx, cx - 2, 25 + bob, 12, 4, "#2043e0");
-    px(ctx, cx + 6, 25 + bob, 5, 5, "#f2c9a0");    // joined fists, low
+    px(ctx, cx + 6, 25 + bob, 5, 5, "#f2c9a0");
     px(ctx, cx + 6, 25 + bob, 5, 1, "#ffffff");
-    px(ctx, cx + 1, 12 + bob, 2, 10, "#ffffff");   // downward speed lines
+    px(ctx, cx + 1, 12 + bob, 2, 10, "#ffffff");
     px(ctx, cx + 5, 14 + bob, 2, 8, "#6f86ff");
   } else if (p.overhead) {
     px(ctx, cx - 10, 8 + bob, 7, 14, OUT);
     px(ctx, cx - 9, 9 + bob, 5, 12, "#2043e0");
-    px(ctx, cx - 9, 9 + bob, 5, 3, "#f2c9a0");    // raised fists
+    px(ctx, cx - 9, 9 + bob, 5, 3, "#f2c9a0");
     px(ctx, cx + 3, 10 + bob, 7, 14, OUT);
     px(ctx, cx + 4, 11 + bob, 5, 12, "#2043e0");
     px(ctx, cx + 4, 11 + bob, 5, 1, "#6f86ff");
@@ -632,8 +744,8 @@ function paintHomelander(ctx, p) {
     px(ctx, ex - 1, ey - 1, 12, 5, OUT);
     px(ctx, ex, ey, 11, 3, "#2043e0");
     px(ctx, ex, ey, 11, 1, "#6f86ff");
-    px(ctx, ex + 8, ey - 1, 4, 5, "#f2c9a0");          // fist (skin)
-    px(ctx, ex - 4, ey + 1, 3, 1, "#ffffff");          // streak
+    px(ctx, ex + 8, ey - 1, 4, 5, "#f2c9a0");
+    px(ctx, ex - 4, ey + 1, 3, 1, "#ffffff");
   } else if (p.kick > 0) {
     arm(ctx, cx - 10, 21 + bob, 5, 10, "#2043e0", "#152c96", "#2043e0");
     arm(ctx, cx + 5, 21 + bob, 5, 10, "#2043e0", "#152c96", "#2043e0");
@@ -642,21 +754,21 @@ function paintHomelander(ctx, p) {
     px(ctx, cx + 11, 35 + bob, 4, 6, "#a01313");
     px(ctx, cx + 11, 35 + bob, 4, 1, "#e05050");
   } else if (p.hook) {
-    // Wide hook: arm looped out and up, heavy fist riding the arc.
+
     px(ctx, cx + 3, 12 + bob, 9, 14, OUT);
     px(ctx, cx + 4, 13 + bob, 7, 12, "#2043e0");
     px(ctx, cx + 4, 13 + bob, 7, 2, "#6f86ff");
-    px(ctx, cx + 6, 21 + bob, 5, 5, "#f2c9a0");        // fist low in the arc
-    px(ctx, cx - 1, 16 + bob, 3, 8, "#ffffff");        // arc streak
+    px(ctx, cx + 6, 21 + bob, 5, 5, "#f2c9a0");
+    px(ctx, cx - 1, 16 + bob, 3, 8, "#ffffff");
     arm(ctx, cx - 10, 22 + bob, 5, 9, "#2043e0", "#152c96", "#2043e0");
   } else if (p.sweep) {
-    // Low sweep: leg scythed forward along the ground, dust kicked up.
+
     px(ctx, cx - 2, 37 + bob, 16, 4, OUT);
     px(ctx, cx - 1, 38 + bob, 14, 2, "#2043e0");
     px(ctx, cx - 1, 38 + bob, 14, 1, "#6f86ff");
-    px(ctx, cx + 11, 36 + bob, 5, 5, "#a01313");       // sweeping boot
+    px(ctx, cx + 11, 36 + bob, 5, 5, "#a01313");
     px(ctx, cx + 11, 36 + bob, 5, 1, "#e05050");
-    px(ctx, cx + 17, 40 + bob, 3, 2, "#8a7a5a");       // dust
+    px(ctx, cx + 17, 40 + bob, 3, 2, "#8a7a5a");
     px(ctx, cx + 20, 38 + bob, 2, 2, "#8a7a5a");
     arm(ctx, cx - 10, 18 + bob + p.armSwing, 5, 9, "#2043e0", "#152c96", "#2043e0");
     arm(ctx, cx + 5, 22 + bob, 5, 9, "#2043e0", "#152c96", "#2043e0");
@@ -671,33 +783,26 @@ function paintHomelander(ctx, p) {
   ctx.restore();
 }
 
-// Wolverine painter: animalistic comic mask (yellow upper face, skin jaw,
-// small feral eyes, blue horns), yellow/blue suit, claws on BOTH fists
-// yellow/blue suit, claws on BOTH fists in every pose. Base stance is a
-// hunched brawler crouch (knees bent, torso pitched forward, head low,
-// both claw-fists up front) — never an upright Wesker copy. p.crouch is a
-// normal deeper sink like every other fighter (shared drop variable).
 function paintWolverine(ctx, p) {
   const cx = 18;
   if (p.lying) { paintLying(ctx, p.lk || 0, LY_X); return; }
   const bob = p.bob;
   const YB = "#e8a81c", YD = "#9a6a0a", BL = "#1c3faa", BD = "#10246a";
   const MSK = "#0b0b10", CLW = "#e8ecf4";
-  // Triple adamantium claw: 3 parallel blades + white tip glint.
+
   const claw = (x, y, len, dx = 1) => {
     for (let i = 0; i < 3; i++) px(ctx, x, y + i * 2, len, 1, CLW);
-    px(ctx, x, y, 1, 6, "#8a93a8"); // root shadow
-    px(ctx, x + (dx > 0 ? len : -1), y, 1, 6, "#ffffff"); // tip glint
+    px(ctx, x, y, 1, 6, "#8a93a8");
+    px(ctx, x + (dx > 0 ? len : -1), y, 1, 6, "#ffffff");
   };
-  // Claw-fist: blue glove + knuckle ridge, claws jutting forward.
+
   const clawFist = (x, y, len, dx = 1) => {
     px(ctx, x - 1, y - 1, 6, 6, OUT);
     px(ctx, x, y, 4, 4, BL);
     px(ctx, x, y, 4, 1, "#6f86ff");
     claw(x + (dx > 0 ? 4 : -len), y - 1, len, dx);
   };
-  // Hunch: bent knees + torso pitched forward. Applied to every grounded
-  // neutral pose (idle/walk/guard) so the silhouette reads feral standing.
+
   const hunch = p.crouch ? 0 : 1;
   const drop = (p.crouch ? 8 : 0) + (p.dip || 0);
   const lean = (p.crouch ? 1 : 3) + (p.dash ? 2 : 0) + (p.wind || 0);
@@ -711,11 +816,11 @@ function paintWolverine(ctx, p) {
     leg(ctx, cx - 10, 36 + bob, 10, BL, BD, "#0b0b10", "#3a3a4d");
     leg(ctx, cx + 4, 36 + bob, 10, BL, BD, "#0b0b10", "#3a3a4d");
   } else if (p.guardWalk) {
-    // Block-retreat: bent knees but narrow walk-cycle feet (no wide sprawl).
+
     leg(ctx, cx - 6 + (p.legL || 0), 37 + bob, 9, BL, BD, "#0b0b10", "#3a3a4d");
     leg(ctx, cx + 1 + (p.legR || 0), 37 + bob, 9, BL, BD, "#0b0b10", "#3a3a4d");
   } else if (p.brace || hunch) {
-    // Wide bent-knee base (brace for strikes, hunch for stance).
+
     leg(ctx, cx - 9 + (p.legL || 0), 37 + bob, 9, BL, BD, "#0b0b10", "#3a3a4d");
     leg(ctx, cx + 4 + (p.legR || 0), 37 + bob, 9, BL, BD, "#0b0b10", "#3a3a4d");
   } else {
@@ -724,63 +829,61 @@ function paintWolverine(ctx, p) {
   }
   ctx.save();
   ctx.translate(lean, drop);
-  // Torso: yellow, pitched forward, slim tiger stripes on the shoulders.
+
   box(ctx, cx - 6, 20 + bob, 12, 15, YB);
-  px(ctx, cx - 6, 20 + bob, 2, 15, "#f4dd9a"); // left rim light
-  px(ctx, cx + 4, 20 + bob, 2, 15, YD);        // right shade
-  px(ctx, cx - 6, 21 + bob, 1, 5, BD);         // slim shoulder stripes
+  px(ctx, cx - 6, 20 + bob, 2, 15, "#f4dd9a");
+  px(ctx, cx + 4, 20 + bob, 2, 15, YD);
+  px(ctx, cx - 6, 21 + bob, 1, 5, BD);
   px(ctx, cx + 5, 21 + bob, 1, 5, BD);
-  px(ctx, cx - 2, 24 + bob, 4, 3, BD);         // chest V
-  px(ctx, cx - 7, 31 + bob, 14, 3, BD);        // belt
+  px(ctx, cx - 2, 24 + bob, 4, 3, BD);
+  px(ctx, cx - 7, 31 + bob, 14, 3, BD);
   px(ctx, cx - 1, 31 + bob, 3, 3, YB);
-  // Head: ANIMALISTIC mask — yellow upper face, skin jaw, small feral
-  // white eyes, blue horn fins. Hunched low-forward: sits 3px lower + 2px
-  // ahead of an upright head (hunch kept).
+
   const hy = 10 + bob + (p.headBob || 0);
   const hx = cx - 3 + (hunch ? 2 : 0);
   box(ctx, hx - 5, hy, 10, 9, "#e6b48c");
-  px(ctx, hx + 3, hy, 2, 9, "#b98a63");          // face shade (light from left)
-  px(ctx, hx - 5, hy, 10, 5, YB);                // yellow mask: upper face covered
-  px(ctx, hx - 5, hy, 10, 1, "#f4dd9a");         // mask rim light
-  px(ctx, hx - 5, hy + 4, 10, 1, MSK);           // mask lower edge (snarl line)
-  px(ctx, hx - 5, hy + 1, 1, 3, MSK);             // black ear lines
+  px(ctx, hx + 3, hy, 2, 9, "#b98a63");
+  px(ctx, hx - 5, hy, 10, 5, YB);
+  px(ctx, hx - 5, hy, 10, 1, "#f4dd9a");
+  px(ctx, hx - 5, hy + 4, 10, 1, MSK);
+  px(ctx, hx - 5, hy + 1, 1, 3, MSK);
   px(ctx, hx + 4, hy + 1, 1, 3, MSK);
-  // Blue horns: thick fins jutting out-up from the mask sides.
+
   px(ctx, hx - 10, hy - 3, 6, 3, OUT);
   px(ctx, hx - 10, hy - 3, 5, 2, BL);
   px(ctx, hx - 10, hy - 3, 5, 1, "#6f86ff");
   px(ctx, hx + 4, hy - 3, 6, 3, OUT);
   px(ctx, hx + 5, hy - 3, 5, 2, BL);
   px(ctx, hx + 5, hy - 3, 5, 1, "#6f86ff");
-  px(ctx, hx - 3, hy + 2, 2, 1, "#ffffff");      // small animalistic eyes, pure white
+  px(ctx, hx - 3, hy + 2, 2, 1, "#ffffff");
   px(ctx, hx + 1, hy + 2, 2, 1, "#ffffff");
   if (p.rageGlow) {
     px(ctx, hx - 3, hy + 2, 2, 1, "#ff3b1a");
     px(ctx, hx + 1, hy + 2, 2, 1, "#ff3b1a");
   }
-  px(ctx, hx - 2, hy + 7, 4, 1, "#a87c58");    // mouth shadow (skin jaw)
+  px(ctx, hx - 2, hy + 7, 4, 1, "#a87c58");
   if (p.seize) {
-    // Grab: both claw-fists shot forward at chest height.
+
     px(ctx, cx - 2, 22 + bob, 12, 4, OUT);
     px(ctx, cx - 1, 23 + bob, 10, 2, YB);
     clawFist(cx + 9, 21 + bob, 6, 1);
     clawFist(cx - 9, 23 + bob, 5, -1);
   } else if (p.guard === 1) {
-    // Stand guard: crossed claws before the face (X-block).
+
     px(ctx, cx + 0, 16 + bob, 8, 14, OUT);
     px(ctx, cx + 1, 17 + bob, 6, 12, BL);
     claw(cx + 1, 18 + bob, 7, 1);
     claw(cx + 1, 24 + bob, 7, 1);
     claw(cx - 6, 20 + bob, 6, -1);
   } else if (p.guard === 2) {
-    // Crouch guard: low X over the knees.
+
     px(ctx, cx - 8, 23 + bob, 15, 8, OUT);
     px(ctx, cx - 7, 24 + bob, 13, 2, BL);
     px(ctx, cx - 7, 28 + bob, 13, 2, BD);
     claw(cx - 7, 24 + bob, 6, 1);
     claw(cx + 5, 26 + bob, 6, 1);
   } else if (p.windup) {
-    // Coiled: rear fist chambered low, lead claws raised high.
+
     px(ctx, cx - 9, 24 + bob, 7, 10, OUT);
     px(ctx, cx - 8, 25 + bob, 5, 8, BL);
     clawFist(cx - 8, 29 + bob, 5, -1);
@@ -788,21 +891,19 @@ function paintWolverine(ctx, p) {
     px(ctx, cx + 3, 15 + bob, 5, 10, YB);
     clawFist(cx + 3, 12 + bob, 7, 1);
   } else if (p.slash) {
-    // RIGHT-HAND forehand slash: lead arm fully extended toward +x, triple
-    // arc streaks trailing behind on -x in purple/red (spin trails).
+
     px(ctx, cx + 4, 20 + bob, 12, 5, OUT);
     px(ctx, cx + 5, 21 + bob, 10, 3, YB);
     clawFist(cx + 15, 20 + bob, 9, 1);
-    px(ctx, cx - 8, 18 + bob, 10, 2, "#8a3aff"); // purple arc streaks
-    px(ctx, cx - 6, 21 + bob, 12, 1, "#ff3b1a"); // red arc streaks
+    px(ctx, cx - 8, 18 + bob, 10, 2, "#8a3aff");
+    px(ctx, cx - 6, 21 + bob, 12, 1, "#ff3b1a");
     px(ctx, cx - 6, 24 + bob, 10, 1, "#8a3aff");
-    // Rear (left) fist chambered low at the hip, claws tucked in.
+
     px(ctx, cx - 10, 24 + bob, 6, 8, OUT);
     px(ctx, cx - 9, 25 + bob, 4, 6, BL);
     px(ctx, cx - 9, 28 + bob, 4, 3, BL);
   } else if (p.cross) {
-    // RIGHT-HAND backhand return: same arm ripped back across toward +x
-    // (never a left-hand lead) — mirrored purple/red arcs mark the return.
+
     px(ctx, cx + 2, 16 + bob, 13, 6, OUT);
     px(ctx, cx + 3, 17 + bob, 11, 4, YB);
     clawFist(cx + 14, 16 + bob, 9, 1);
@@ -813,27 +914,26 @@ function paintWolverine(ctx, p) {
     px(ctx, cx - 9, 25 + bob, 4, 6, BL);
     px(ctx, cx - 9, 28 + bob, 4, 3, BL);
   } else if (p.upper || p.dive) {
-    // Rising upper / diving double-claw: RIGHT fist overhead leading, LEFT
-    // fist tucked at the chest — claws fanned, purple/red rise streaks.
+
     px(ctx, cx - 3, 8 + bob, 9, 13, OUT);
     px(ctx, cx - 2, 9 + bob, 7, 11, YB);
-    clawFist(cx + 3, 5 + bob, 9, 1);   // right fist overhead, leading
+    clawFist(cx + 3, 5 + bob, 9, 1);
     px(ctx, cx - 6, 22 + bob, 6, 8, OUT);
-    px(ctx, cx - 5, 23 + bob, 4, 6, BL); // left fist chambered at chest
-    px(ctx, cx - 8, 10 + bob, 3, 8, "#8a3aff"); // purple rise streaks
-    px(ctx, cx + 9, 10 + bob, 3, 8, "#ff3b1a"); // red rise streaks
+    px(ctx, cx - 5, 23 + bob, 4, 6, BL);
+    px(ctx, cx - 8, 10 + bob, 3, 8, "#8a3aff");
+    px(ctx, cx + 9, 10 + bob, 3, 8, "#ff3b1a");
   } else if (p.tackle) {
-    // Rush: shoulder dropped, RIGHT claws speared level, left claws back.
+
     px(ctx, cx + 0, 24 + bob, 13, 7, OUT);
     px(ctx, cx + 1, 25 + bob, 11, 5, YB);
     clawFist(cx + 12, 24 + bob, 9, 1);
     px(ctx, cx - 10, 24 + bob, 6, 9, OUT);
     px(ctx, cx - 9, 25 + bob, 4, 7, BL);
     clawFist(cx - 13, 24 + bob, 6, -1);
-    px(ctx, cx - 8, 22 + bob, 8, 2, "#8a3aff"); // purple speed lines
-    px(ctx, cx - 10, 26 + bob, 10, 1, "#ff3b1a"); // red speed lines
+    px(ctx, cx - 8, 22 + bob, 8, 2, "#8a3aff");
+    px(ctx, cx - 10, 26 + bob, 10, 1, "#ff3b1a");
   } else {
-    // Hunched neutral: BOTH claw-fists up front, elbows tucked, claws out.
+
     px(ctx, cx - 9, 22 + bob + p.armSwing, 6, 9, OUT);
     px(ctx, cx - 8, 23 + bob + p.armSwing, 4, 7, BL);
     clawFist(cx - 12, 22 + bob + p.armSwing, 5, -1);
@@ -848,7 +948,6 @@ function paintWolverine(ctx, p) {
   ctx.restore();
 }
 
-// Gamma knockdown palette (green skin, purple pants).
 const LY_U = Object.freeze({
   torso: "#3e9c3e", rim: "#7ce07c", pants: "#5a2a8f", shade: "#3a1a5c",
   skin: "#3e9c3e", hair: "#0b0b10", eye: "#ffffff", eyeHi: "#ff3b1a",
@@ -861,7 +960,7 @@ function paintHulk(ctx, p) {
   const bob = p.bob;
   const GR = "#3e9c3e", GD = "#206020", LITE = "#7ce07c";
   const PN = "#5a2a8f", PD = "#3a1a5c";
-  // Big bare feet (green = barefoot, no boots on this wall).
+
   const feet = [GR, GD];
   if (p.air === 1) {
     leg(ctx, cx - 8 + p.legL, 36 + bob, 8, PN, PD, feet[0], feet[1]);
@@ -873,38 +972,38 @@ function paintHulk(ctx, p) {
     leg(ctx, cx - 12, 36 + bob, 10, PN, PD, feet[0], feet[1]);
     leg(ctx, cx + 5, 36 + bob, 10, PN, PD, feet[0], feet[1]);
   } else if (p.stomp) {
-    // Stomp: one leg raised high, other planted wide.
+
     leg(ctx, cx - 10, 36 + bob, 10, PN, PD, feet[0], feet[1]);
-    box(ctx, cx + 1, 28 + bob, 11, 6, PN); // raised thigh
-    px(ctx, cx + 10, 29 + bob, 4, 5, GR);  // bare stomping foot
+    box(ctx, cx + 1, 28 + bob, 11, 6, PN);
+    px(ctx, cx + 10, 29 + bob, 4, 5, GR);
   } else {
     leg(ctx, cx - 10 + (p.legL || 0), 36 + bob, 10, PN, PD, feet[0], feet[1]);
     leg(ctx, cx + 4 + (p.legR || 0), 36 + bob, 10, PN, PD, feet[0], feet[1]);
   }
   ctx.save();
   ctx.translate(p.wind || 0, (p.crouch ? 7 : 0) + (p.dip || 0));
-  // Torso: huge green mass, wide shoulders, torn purple waist.
+
   box(ctx, cx - 10, 18 + bob, 20, 16, GR);
-  px(ctx, cx - 10, 18 + bob, 2, 16, LITE);  // left rim light
-  px(ctx, cx + 8, 18 + bob, 2, 16, GD);     // right shade
-  px(ctx, cx - 4, 21 + bob, 8, 2, GD);      // pec line
-  px(ctx, cx - 1, 23 + bob, 2, 6, GD);      // ab line
-  px(ctx, cx - 10, 31 + bob, 20, 3, PN);    // torn pants waist
+  px(ctx, cx - 10, 18 + bob, 2, 16, LITE);
+  px(ctx, cx + 8, 18 + bob, 2, 16, GD);
+  px(ctx, cx - 4, 21 + bob, 8, 2, GD);
+  px(ctx, cx - 1, 23 + bob, 2, 6, GD);
+  px(ctx, cx - 10, 31 + bob, 20, 3, PN);
   px(ctx, cx - 10, 31 + bob, 20, 1, "#7c4dc0");
-  // Head: small, low between the traps. Flat-top black hair, heavy brow.
+
   const hy = 8 + bob + (p.headBob || 0);
   const hx = cx - 1;
   box(ctx, hx - 5, hy, 10, 8, GR);
-  px(ctx, hx - 5, hy, 10, 2, "#0b0b10");    // flat-top hair
-  px(ctx, hx - 5, hy + 4, 10, 1, GD);       // brow ridge shadow
-  px(ctx, hx - 3, hy + 5, 2, 2, "#ffffff"); // angry eyes
+  px(ctx, hx - 5, hy, 10, 2, "#0b0b10");
+  px(ctx, hx - 5, hy + 4, 10, 1, GD);
+  px(ctx, hx - 3, hy + 5, 2, 2, "#ffffff");
   px(ctx, hx + 1, hy + 5, 2, 2, "#ffffff");
   if (p.rageGlow) {
     px(ctx, hx - 3, hy + 5, 2, 2, "#ff3b1a");
     px(ctx, hx + 1, hy + 5, 2, 2, "#ff3b1a");
   }
-  px(ctx, hx - 2, hy + 7, 5, 1, "#144014"); // snarl mouth
-  // Fist helper: big 6x6 green knuckle block.
+  px(ctx, hx - 2, hy + 7, 5, 1, "#144014");
+
   const fist = (x, y) => {
     px(ctx, x - 1, y - 1, 8, 8, OUT);
     px(ctx, x, y, 6, 6, GR);
@@ -912,27 +1011,27 @@ function paintHulk(ctx, p) {
     px(ctx, x, y + 4, 3, 2, GD);
   };
   if (p.seize) {
-    // Grab: both arms shot forward wide at chest height.
+
     px(ctx, cx - 4, 22 + bob, 16, 5, OUT);
     px(ctx, cx - 3, 23 + bob, 14, 3, GR);
     fist(cx + 10, 21 + bob);
     fist(cx - 16, 21 + bob);
   } else if (p.guard === 1) {
-    // Stand guard: massive forearms crossed into an X-wall.
+
     px(ctx, cx - 10, 16 + bob, 20, 14, OUT);
     px(ctx, cx - 9, 17 + bob, 18, 5, GR);
     px(ctx, cx - 9, 24 + bob, 18, 5, GD);
     fist(cx + 8, 16 + bob);
     fist(cx - 14, 23 + bob);
   } else if (p.guard === 2) {
-    // Crouch guard: low X over the knees.
+
     px(ctx, cx - 11, 26 + bob, 22, 10, OUT);
     px(ctx, cx - 10, 27 + bob, 20, 3, GR);
     px(ctx, cx - 10, 32 + bob, 20, 3, GD);
     fist(cx - 14, 26 + bob);
     fist(cx + 8, 31 + bob);
   } else if (p.windup) {
-    // Coiled: right fist dragged back low, left arm high guard.
+
     px(ctx, cx - 12, 26 + bob, 7, 10, OUT);
     px(ctx, cx - 11, 27 + bob, 5, 8, GD);
     fist(cx - 14, 30 + bob);
@@ -940,22 +1039,22 @@ function paintHulk(ctx, p) {
     px(ctx, cx + 6, 15 + bob, 5, 8, GR);
     fist(cx + 5, 12 + bob);
   } else if (p.smash) {
-    // Overhead forehand smash: right arm fully extended up-forward.
+
     px(ctx, cx + 2, 4 + bob, 8, 16, OUT);
     px(ctx, cx + 3, 5 + bob, 6, 14, GR);
     fist(cx + 2, 2 + bob);
-    px(ctx, cx - 12, 24 + bob, 7, 10, OUT); // left arm back low
+    px(ctx, cx - 12, 24 + bob, 7, 10, OUT);
     px(ctx, cx - 11, 25 + bob, 5, 8, GD);
     fist(cx - 13, 28 + bob);
   } else if (p.backhand) {
-    // Backhand return: left arm ripped across the chest toward +x.
+
     px(ctx, cx - 12, 20 + bob, 24, 6, OUT);
     px(ctx, cx - 11, 21 + bob, 22, 4, GR);
     fist(cx + 10, 19 + bob);
-    px(ctx, cx + 2, 10 + bob, 7, 10, OUT); // right arm raised for the next smash
+    px(ctx, cx + 2, 10 + bob, 7, 10, OUT);
     px(ctx, cx + 3, 11 + bob, 5, 8, GD);
   } else if (p.quake) {
-    // Seismic slam: BOTH fists overhead, coming down as one wall.
+
     px(ctx, cx - 8, 2 + bob, 7, 17, OUT);
     px(ctx, cx - 7, 3 + bob, 5, 15, GD);
     fist(cx - 8, 0 + bob);
@@ -963,7 +1062,7 @@ function paintHulk(ctx, p) {
     px(ctx, cx + 2, 3 + bob, 5, 15, GR);
     fist(cx + 0, 0 + bob);
   } else if (p.stomp) {
-    // Stomp balance: arms flung wide while the leg comes down.
+
     px(ctx, cx - 16, 20 + bob, 7, 6, OUT);
     px(ctx, cx - 15, 21 + bob, 5, 4, GD);
     fist(cx - 17, 19 + bob);
@@ -971,34 +1070,34 @@ function paintHulk(ctx, p) {
     px(ctx, cx + 10, 21 + bob, 5, 4, GR);
     fist(cx + 10, 19 + bob);
   } else if (p.tackle) {
-    // Gamma Charge: shoulder first, head tucked, arms swept back.
+
     px(ctx, cx + 2, 20 + bob, 14, 10, OUT);
     px(ctx, cx + 3, 21 + bob, 12, 8, GR);
-    px(ctx, cx + 12, 22 + bob, 5, 6, LITE); // lead shoulder cap
+    px(ctx, cx + 12, 22 + bob, 5, 6, LITE);
     px(ctx, cx - 12, 24 + bob, 8, 6, OUT);
     px(ctx, cx - 11, 25 + bob, 6, 4, GD);
     fist(cx - 15, 24 + bob);
-    px(ctx, cx - 9, 20 + bob, 12, 3, GD);   // speed creases
+    px(ctx, cx - 9, 20 + bob, 12, 3, GD);
   } else if (p.inhale) {
-    // Thunder Clap windup: chest swelled, arms spread wide back.
+
     px(ctx, cx - 16, 20 + bob, 8, 8, OUT);
     px(ctx, cx - 15, 21 + bob, 6, 6, GD);
     fist(cx - 17, 20 + bob);
     px(ctx, cx + 8, 20 + bob, 8, 8, OUT);
     px(ctx, cx + 9, 21 + bob, 6, 6, GR);
     fist(cx + 9, 20 + bob);
-    px(ctx, cx - 4, 22 + bob, 8, 4, LITE); // swelled chest glint
+    px(ctx, cx - 4, 22 + bob, 8, 4, LITE);
   } else if (p.shout) {
-    // Thunder Clap: both palms smashed together dead center.
+
     px(ctx, cx - 6, 20 + bob, 20, 8, OUT);
     px(ctx, cx - 5, 21 + bob, 8, 6, GD);
     px(ctx, cx + 3, 21 + bob, 8, 6, GR);
     fist(cx - 2, 20 + bob);
     fist(cx + 0, 20 + bob);
-    px(ctx, cx - 4, 22 + bob, 2, 2, "#ffffff"); // clap flash core
+    px(ctx, cx - 4, 22 + bob, 2, 2, "#ffffff");
     px(ctx, cx + 6, 22 + bob, 2, 2, "#ffffff");
   } else if (p.ascend) {
-    // Worldbreaker lift: both arms straight up, victim overhead.
+
     px(ctx, cx - 8, 2 + bob, 6, 16, OUT);
     px(ctx, cx - 7, 3 + bob, 4, 14, GD);
     fist(cx - 8, 0 + bob);
@@ -1006,7 +1105,7 @@ function paintHulk(ctx, p) {
     px(ctx, cx + 3, 3 + bob, 4, 14, GR);
     fist(cx + 1, 0 + bob);
   } else {
-    // Neutral: two hanging wrecking balls, knuckles nearly scraping.
+
     px(ctx, cx - 14, 24 + bob + p.armSwing, 7, 12, OUT);
     px(ctx, cx - 13, 25 + bob + p.armSwing, 5, 10, GD);
     fist(cx - 14, 30 + bob + p.armSwing);
@@ -1021,14 +1120,970 @@ function paintHulk(ctx, p) {
   ctx.restore();
 }
 
-// Feral knockdown palette (yellow/blue suit).
+const LY_I = Object.freeze({
+  torso: "#c02828", rim: "#ff7a5c", pants: "#c02828", shade: "#701414",
+  skin: "#e8b81c", hair: "#701414", eye: "#bff4ff", eyeHi: "#ff3b1a",
+  boot: "#e8b81c", bootHi: "#9a6a0a", cape: null, belt: "#701414",
+});
+
+function paintIronman(ctx, p) {
+  const cx = 18;
+  if (p.lying) { paintLying(ctx, p.lk || 0, LY_I); return; }
+  const bob = p.bob;
+  const RD = "#c02828", DD = "#701414", GD = "#e8b81c", GD2 = "#9a6a0a";
+  const LITE = "#ff7a5c", EYE = "#bff4ff";
+
+  const flames = (x, y) => {
+    px(ctx, x, y, 3, 2, "#ff7a1a");
+    px(ctx, x, y + 2, 3, 3, "#ffd23e");
+    px(ctx, x + 1, y + 5, 1, 2, "#ffffff");
+  };
+
+  const leg7 = (x, yTop, h) => {
+    px(ctx, x - 1, yTop - 1, 10, h + 5, OUT);
+    px(ctx, x, yTop, 8, h, RD);
+    px(ctx, x + 6, yTop, 2, h, DD);
+    px(ctx, x, yTop + 2, 8, 1, LITE);
+    px(ctx, x + 1, yTop + 5, 6, 2, GD);
+    px(ctx, x + 1, yTop + 5, 6, 1, "#f4dd9a");
+    px(ctx, x, yTop + h, 8, 3, GD);
+    px(ctx, x, yTop + h, 8, 1, "#f4dd9a");
+  };
+  if (p.hover) {
+
+    leg7(cx - 6, 34, 12);
+    leg7(cx + 1, 34, 12);
+    flames(cx - 4, 46 + bob);
+    flames(cx + 1, 46 + bob);
+  } else if (p.air === 1) {
+    leg7(cx - 8 + p.legL, 35 + bob, 9);
+    leg7(cx + 1 + p.legR, 37 + bob, 7);
+    flames(cx - 6 + p.legL, 44 + bob);
+  } else if (p.air === 2) {
+    leg7(cx - 8 + p.legL, 32 + bob, 12);
+    leg7(cx + 1 + p.legR, 33 + bob, 11);
+  } else if (p.dash) {
+    leg7(cx - 12, 35 + bob, 12);
+    leg7(cx + 5, 35 + bob, 12);
+    flames(cx - 14, 44 + bob);
+  } else {
+
+    leg7(cx - 9 + (p.legL || 0), 33 + bob, 12);
+    leg7(cx + 2 + (p.legR || 0), 33 + bob, 12);
+  }
+  ctx.save();
+  ctx.translate(p.wind || 0, (p.crouch ? 6 : 0) + (p.dip || 0));
+
+  box(ctx, cx - 10, 17 + bob, 20, 15, RD);
+  px(ctx, cx - 10, 17 + bob, 2, 15, LITE);
+  px(ctx, cx + 8, 17 + bob, 2, 15, DD);
+  px(ctx, cx - 10, 17 + bob, 20, 2, GD);
+  px(ctx, cx - 4, 19 + bob, 8, 1, GD2);
+  px(ctx, cx - 1, 19 + bob, 2, 12, DD);
+  px(ctx, cx - 7, 21 + bob, 5, 4, RD);
+  px(ctx, cx + 2, 21 + bob, 5, 4, RD);
+  px(ctx, cx - 7, 21 + bob, 5, 1, LITE);
+  px(ctx, cx + 2, 21 + bob, 5, 1, LITE);
+  px(ctx, cx - 7, 25 + bob, 14, 1, DD);
+  px(ctx, cx - 5, 27 + bob, 10, 1, DD);
+  px(ctx, cx - 5, 29 + bob, 10, 1, DD);
+  px(ctx, cx - 5, 27 + bob, 2, 3, LITE);
+  px(ctx, cx - 9, 19 + bob, 1, 11, DD);
+  px(ctx, cx + 8, 19 + bob, 1, 11, DD);
+  px(ctx, cx - 6, 30 + bob, 12, 2, GD);
+  px(ctx, cx - 6, 30 + bob, 12, 1, "#f4dd9a");
+  px(ctx, cx - 4, 24 + bob, 7, 7, OUT);
+  px(ctx, cx - 3, 25 + bob, 5, 5, DD);
+  px(ctx, cx - 2, 26 + bob, 3, 3, EYE);
+  px(ctx, cx - 1, 26 + bob, 2, 2, "#ffffff");
+  px(ctx, cx - 5, 26 + bob, 1, 3, EYE);
+  px(ctx, cx + 4, 26 + bob, 1, 3, EYE);
+  if (p.beam) {
+    px(ctx, cx - 4, 24 + bob, 9, 7, "#ffffff");
+  }
+
+  const hy = 6 + bob + (p.headBob || 0) + (p.beam ? 4 : 0);
+  const hx = cx - 1;
+  box(ctx, hx - 6, hy, 12, 11, GD);
+  px(ctx, hx - 6, hy, 12, 3, RD);
+  px(ctx, hx - 6, hy, 2, 11, RD);
+  px(ctx, hx + 4, hy, 2, 11, RD);
+  px(ctx, hx - 6, hy + 3, 12, 1, DD);
+  px(ctx, hx - 1, hy + 3, 2, 7, "#f4dd9a");
+  px(ctx, hx - 4, hy + 6, 1, 3, GD2);
+  px(ctx, hx + 3, hy + 6, 1, 3, GD2);
+  px(ctx, hx - 4, hy + 5, 3, 2, EYE);
+  px(ctx, hx + 1, hy + 5, 3, 2, EYE);
+  px(ctx, hx - 4, hy + 5, 1, 1, "#ffffff");
+  px(ctx, hx + 1, hy + 5, 1, 1, "#ffffff");
+  if (p.rageGlow) {
+    px(ctx, hx - 4, hy + 5, 3, 2, "#ff3b1a");
+    px(ctx, hx + 1, hy + 5, 3, 2, "#ff3b1a");
+  }
+  px(ctx, hx - 3, hy + 9, 6, 1, GD2);
+  px(ctx, hx - 2, hy + 9, 1, 1, DD);
+  px(ctx, hx + 1, hy + 9, 1, 1, DD);
+  px(ctx, hx - 3, hy + 10, 6, 1, DD);
+
+  const pauldron = (x, y) => {
+    px(ctx, x - 1, y - 1, 8, 7, OUT);
+    px(ctx, x, y, 6, 5, GD);
+    px(ctx, x, y, 6, 1, "#f4dd9a");
+    px(ctx, x, y + 4, 6, 1, GD2);
+    px(ctx, x, y + 2, 6, 1, "#d4a017");
+  };
+
+  const gaunt = (x, y) => {
+    px(ctx, x - 1, y - 1, 8, 8, OUT);
+    px(ctx, x, y, 6, 6, GD);
+    px(ctx, x, y, 6, 2, "#f4dd9a");
+    px(ctx, x, y + 3, 6, 1, GD2);
+  };
+
+  const palm = (x, y, big = false) => {
+    const s = big ? 6 : 4;
+    px(ctx, x - 1, y - 1, s + 2, s + 2, OUT);
+    px(ctx, x, y, s, s, RD);
+    px(ctx, x + 1, y + 1, s - 2, s - 2, EYE);
+    px(ctx, x + 1, y + 1, 1, 1, "#ffffff");
+  };
+
+  const armSeg = (x, y, w, h) => {
+    px(ctx, x - 1, y - 1, w + 2, h + 2, OUT);
+    px(ctx, x, y, w, h, RD);
+    px(ctx, x + w - 2, y, 2, h, DD);
+    px(ctx, x, y + h - 2, w, 2, GD);
+    px(ctx, x, y + h - 2, w, 1, "#f4dd9a");
+  };
+  if (p.seize) {
+
+    armSeg(cx - 12, 20 + bob, 12, 5);
+    armSeg(cx + 0, 20 + bob, 12, 5);
+    gaunt(cx + 11, 19 + bob);
+    gaunt(cx - 15, 19 + bob);
+  } else if (p.guard === 1) {
+
+    pauldron(cx - 14, 15 + bob);
+    pauldron(cx + 8, 15 + bob);
+    px(ctx, cx - 10, 17 + bob, 20, 12, OUT);
+    px(ctx, cx - 9, 18 + bob, 18, 4, GD);
+    px(ctx, cx - 9, 24 + bob, 18, 4, GD2);
+    px(ctx, cx - 9, 22 + bob, 18, 2, RD);
+    palm(cx + 9, 17 + bob);
+    palm(cx - 13, 23 + bob);
+  } else if (p.guard === 2) {
+
+    px(ctx, cx - 11, 26 + bob, 22, 10, OUT);
+    px(ctx, cx - 10, 27 + bob, 20, 3, GD);
+    px(ctx, cx - 10, 32 + bob, 20, 3, GD2);
+    palm(cx - 12, 26 + bob);
+    palm(cx + 8, 31 + bob);
+  } else if (p.windup) {
+
+    pauldron(cx - 14, 15 + bob);
+    pauldron(cx + 8, 15 + bob);
+    armSeg(cx - 12, 26 + bob, 8, 7);
+    palm(cx - 11, 27 + bob, true);
+    px(ctx, cx - 12, 28 + bob, 10, 1, EYE);
+    armSeg(cx + 4, 18 + bob, 7, 8);
+    gaunt(cx + 4, 16 + bob);
+  } else if (p.repulsor) {
+
+    armSeg(cx + 2, 12 + bob, 12, 5);
+    palm(cx + 11, 11 + bob, true);
+    px(ctx, cx + 14, 12 + bob, 8, 1, EYE);
+    px(ctx, cx + 12, 14 + bob, 10, 1, "#35c8ff");
+    px(ctx, cx + 14, 16 + bob, 6, 1, EYE);
+    armSeg(cx - 10, 26 + bob, 7, 8);
+    gaunt(cx - 11, 29 + bob);
+  } else if (p.burst) {
+
+    armSeg(cx + 2, 10 + bob, 12, 4);
+    palm(cx + 11, 8 + bob, true);
+    armSeg(cx + 2, 18 + bob, 12, 4);
+    palm(cx + 11, 16 + bob, true);
+    px(ctx, cx + 14, 9 + bob, 8, 1, EYE);
+    px(ctx, cx + 14, 17 + bob, 8, 1, "#35c8ff");
+    px(ctx, cx - 6, 10 + bob, 8, 1, EYE);
+    px(ctx, cx - 6, 18 + bob, 8, 1, "#35c8ff");
+  } else if (p.beam) {
+
+    px(ctx, cx - 4, 11 + bob, 15, 15, OUT);
+    px(ctx, cx - 3, 12 + bob, 13, 13, RD);
+    px(ctx, cx - 1, 8 + bob, 11, 12, "#ffffff");
+    px(ctx, cx + 1, 10 + bob, 7, 8, EYE);
+    px(ctx, cx + 2, 11 + bob, 3, 3, "#ffffff");
+    px(ctx, cx - 11, 22 + bob, 6, 6, OUT);
+    px(ctx, cx - 10, 23 + bob, 4, 4, DD);
+    px(ctx, cx + 9, 22 + bob, 6, 6, OUT);
+    px(ctx, cx + 10, 23 + bob, 4, 4, DD);
+  } else if (p.slam) {
+
+    armSeg(cx - 8, 2 + bob, 6, 13);
+    armSeg(cx + 2, 2 + bob, 6, 13);
+    gaunt(cx - 8, 0 + bob);
+    gaunt(cx + 2, 0 + bob);
+    px(ctx, cx - 2, 4 + bob, 4, 8, RD);
+  } else if (p.sweep) {
+
+    px(ctx, cx + 0, 32 + bob, 13, 6, OUT);
+    px(ctx, cx + 1, 33 + bob, 11, 4, RD);
+    px(ctx, cx + 9, 35 + bob, 3, 2, GD);
+    px(ctx, cx + 12, 32 + bob, 5, 6, GD);
+    px(ctx, cx + 12, 32 + bob, 5, 1, "#f4dd9a");
+    flames(cx + 8, 36 + bob);
+    armSeg(cx - 10, 22 + bob, 6, 8);
+    gaunt(cx - 11, 26 + bob);
+  } else if (p.punch) {
+
+    const e = 6 + (p.punch || 0) * 2;
+    armSeg(cx + 2, 20 + bob, e + 2, 5);
+    palm(cx + 2 + e, 20 + bob);
+    px(ctx, cx + 4 + e, 21 + bob, 6, 1, EYE);
+    armSeg(cx - 10, 24 + bob, 6, 8);
+    gaunt(cx - 11, 28 + bob);
+  } else if (p.kick) {
+
+    const e = 8 + (p.kick || 0) * 2;
+    px(ctx, cx + 0, 32 + bob, e + 5, 6, OUT);
+    px(ctx, cx + 1, 33 + bob, e + 3, 4, RD);
+    px(ctx, cx + e - 1, 33 + bob, 5, 4, GD);
+    px(ctx, cx + e - 1, 33 + bob, 5, 1, "#f4dd9a");
+    flames(cx + e - 4, 37 + bob);
+    armSeg(cx - 10, 20 + bob, 6, 8);
+    gaunt(cx - 11, 24 + bob);
+  } else if (p.hover) {
+
+    armSeg(cx - 16, 22 + bob, 9, 5);
+    palm(cx - 17, 22 + bob);
+    armSeg(cx + 7, 22 + bob, 9, 5);
+    palm(cx + 13, 22 + bob);
+    pauldron(cx - 15, 15 + bob);
+    pauldron(cx + 9, 15 + bob);
+  } else {
+
+    pauldron(cx - 15, 15 + bob + p.armSwing);
+    pauldron(cx + 9, 15 + bob - p.armSwing);
+    armSeg(cx - 10, 22 + bob + p.armSwing, 6, 9);
+    gaunt(cx - 11, 28 + bob + p.armSwing);
+    armSeg(cx + 4, 22 + bob - p.armSwing, 6, 9);
+    gaunt(cx + 3, 28 + bob - p.armSwing);
+    if (p.dash) {
+      flames(cx - 10, 44 + bob);
+      px(ctx, cx - 12, 24 + bob, 6, 1, "#ffffff");
+    }
+  }
+  ctx.restore();
+}
+
 const LY_X = Object.freeze({
   torso: "#e8a81c", rim: "#f4dd9a", pants: "#1c3faa", shade: "#10246a",
   skin: "#e6b48c", hair: "#0b0b10", eye: "#ffffff", eyeHi: "#ff3b1a",
   boot: "#0b0b10", bootHi: "#3a3a4d", cape: null, belt: "#10246a",
 });
 
-// Pose table: subtle numbers => smooth idle/walk without extra assets.
+const LY_T = Object.freeze({
+  torso: "#2043e0", rim: "#6f86ff", pants: "#2043e0", shade: "#152c96",
+  skin: "#e6b48c", hair: "#c8d0e0", eye: "#ffffff", eyeHi: "#1a3fd4",
+  boot: "#3a3a4d", bootHi: "#ffd23e", cape: "#a01313", belt: "#ffd23e",
+});
+
+function paintThor(ctx, p) {
+  const cx = 18;
+  if (p.lying) { paintLying(ctx, p.lk || 0, LY_T); return; }
+  const bob = p.bob;
+  const BL = "#2043e0", BD = "#152c96", GD = "#ffd23e", HI = "#6f86ff";
+  const SV = "#c8d0e0", CAPE = "#a01313", CAPED = "#6e0d0d", CAPEL = "#e05050";
+  const SK = "#e6b48c", SKD = "#b98a63", IRON = "#9a9ab0", WOOD = "#4a3320";
+
+  const wv = Math.max(-2, Math.min(2, p.capeWave || 0));
+  px(ctx, cx - 10 + wv, 15 + bob, 17, 29, CAPED);
+  px(ctx, cx - 9 + wv, 16 + bob, 14, 27, CAPE);
+  px(ctx, cx - 10 + wv, 16 + bob, 1, 27, CAPEL);
+  px(ctx, cx - 2 + wv, 20 + bob, 1, 18, CAPED);
+  px(ctx, cx + 3 + wv, 24 + bob, 1, 14, CAPED);
+
+  const drop = (p.crouch ? 8 : 0) + (p.dip || 0);
+  const lean = (p.dash ? 2 : 0) + (p.wind || 0);
+  if (p.crouch) {
+    leg(ctx, cx - 9 + p.legL, 40 + bob, 6, BL, BD, "#3a3a4d", GD);
+    leg(ctx, cx + 4 + p.legR, 40 + bob, 6, BL, BD, "#3a3a4d", GD);
+  } else if (p.air === 1) {
+    leg(ctx, cx - 6 + p.legL, 37 + bob, 7, BL, BD, "#3a3a4d", GD);
+    leg(ctx, cx + 1 + p.legR, 39 + bob, 5, BL, BD, "#3a3a4d", GD);
+  } else if (p.air === 2) {
+    leg(ctx, cx - 6 + p.legL, 34 + bob, 11, BL, BD, "#3a3a4d", GD);
+    leg(ctx, cx + 1 + p.legR, 35 + bob, 10, BL, BD, "#3a3a4d", GD);
+  } else if (p.dash) {
+    leg(ctx, cx - 10, 36 + bob, 10, BL, BD, "#3a3a4d", GD);
+    leg(ctx, cx + 4, 36 + bob, 10, BL, BD, "#3a3a4d", GD);
+  } else if (p.brace) {
+    leg(ctx, cx - 9 + (p.legL || 0), 38 + bob, 8, BL, BD, "#3a3a4d", GD);
+    leg(ctx, cx + 4 + (p.legR || 0), 38 + bob, 8, BL, BD, "#3a3a4d", GD);
+  } else {
+    leg(ctx, cx - 6 + p.legL, 34 + bob, 12, BL, BD, "#3a3a4d", GD);
+    leg(ctx, cx + 1 + p.legR, 34 + bob, 12, BL, BD, "#3a3a4d", GD);
+  }
+  px(ctx, cx - 6 + p.legL, 38 + bob, 5, 2, GD);
+  px(ctx, cx + 1 + p.legR, 38 + bob, 5, 2, GD);
+
+  ctx.save();
+  ctx.translate(lean, drop);
+
+  box(ctx, cx - 7, 19 + bob, 14, 16, BL);
+  px(ctx, cx - 7, 19 + bob, 2, 16, HI);
+  px(ctx, cx + 5, 19 + bob, 2, 16, BD);
+  for (let i = 0; i < 3; i++) px(ctx, cx - 4 + i * 3, 22 + bob, 2, 2, GD);
+  px(ctx, cx - 7, 30 + bob, 14, 4, GD);
+  px(ctx, cx - 7, 30 + bob, 14, 1, "#fff2a8");
+  px(ctx, cx - 1, 31 + bob, 4, 2, BD);
+  px(ctx, cx - 10, 17 + bob, 4, 4, OUT);
+  px(ctx, cx - 9, 18 + bob, 2, 2, GD);
+  px(ctx, cx + 6, 17 + bob, 4, 4, OUT);
+  px(ctx, cx + 7, 18 + bob, 2, 2, GD);
+
+  const hy = 7 + bob + (p.headBob || 0);
+  box(ctx, cx - 5, hy, 10, 9, SK);
+  px(ctx, cx + 3, hy, 2, 9, SKD);
+  px(ctx, cx - 6, hy - 3 + 0, 12, 4, OUT);
+  px(ctx, cx - 5, hy - 2, 10, 3, SV);
+  px(ctx, cx - 2, hy - 2, 4, 1, "#ffffff");
+  px(ctx, cx - 1, hy - 3, 2, 1, SV);
+  px(ctx, cx - 13, hy - 5, 6, 5, OUT);
+  px(ctx, cx - 13, hy - 5, 5, 2, "#ffffff");
+  px(ctx, cx - 11, hy - 3, 5, 3, "#ffffff");
+  px(ctx, cx + 8, hy - 5, 6, 5, OUT);
+  px(ctx, cx + 9, hy - 5, 5, 2, "#ffffff");
+  px(ctx, cx + 7, hy - 3, 5, 3, "#ffffff");
+  px(ctx, cx - 4, hy + 3, 2, 2, "#ffffff");
+  px(ctx, cx + 2, hy + 3, 2, 2, "#ffffff");
+  if (p.beam || p.charge || p.stormcall) {
+    px(ctx, cx - 4, hy + 3, 2, 2, "#bff4ff");
+    px(ctx, cx + 2, hy + 3, 2, 2, "#bff4ff");
+  }
+  px(ctx, cx - 2, hy + 7, 4, 1, SKD);
+
+  const bracer = (x, y) => {
+    px(ctx, x - 1, y - 1, 7, 6, OUT);
+    px(ctx, x, y, 5, 4, GD);
+    px(ctx, x, y, 5, 1, "#fff2a8");
+  };
+  const armV = (x, y, h) => {
+    px(ctx, x - 1, y - 1, 6, h + 2, OUT);
+    px(ctx, x, y, 4, h, SK);
+    px(ctx, x + 2, y, 2, h, SKD);
+  };
+  const armH = (x, y, w) => {
+    px(ctx, x - 1, y - 1, w + 2, 5, OUT);
+    px(ctx, x, y, w, 3, SK);
+    px(ctx, x, y + 2, w, 1, SKD);
+  };
+  const fist = (x, y) => {
+    px(ctx, x - 1, y - 1, 6, 6, OUT);
+    px(ctx, x, y, 4, 4, SK);
+    px(ctx, x, y + 3, 4, 1, SKD);
+  };
+  const hammerHead = (x, y) => {
+    px(ctx, x - 1, y - 1, 11, 7, OUT);
+    px(ctx, x, y, 9, 5, IRON);
+    px(ctx, x, y, 9, 1, "#ffffff");
+    px(ctx, x, y + 4, 9, 1, "#5a5a70");
+  };
+  const hammerGrip = (x, y, len) => {
+    px(ctx, x - 1, y - 1, 5, len + 2, OUT);
+    px(ctx, x, y, 3, len, WOOD);
+    px(ctx, x, y + len - 2, 3, 2, GD);
+  };
+
+  if (p.seize) {
+    armH(cx - 1, 21 + bob, 11);
+    fist(cx + 9, 20 + bob);
+    armV(cx - 9, 22 + bob, 5);
+    bracer(cx - 9, 26 + bob);
+  } else if (p.guard === 1) {
+    hammerHead(cx - 12, 18 + bob);
+    hammerGrip(cx - 9, 23 + bob, 6);
+    fist(cx - 10, 25 + bob);
+    armH(cx - 6, 24 + bob, 10);
+    bracer(cx - 1, 23 + bob);
+    armV(cx + 4, 20 + bob, 6);
+    bracer(cx + 3, 25 + bob);
+  } else if (p.guard === 2) {
+    armH(cx - 8, 24 + bob, 9);
+    armH(cx + 1, 26 + bob, 9);
+    bracer(cx - 4, 23 + bob);
+    bracer(cx + 5, 25 + bob);
+    hammerHead(cx - 1, 29 + bob);
+    hammerGrip(cx + 2, 34 + bob, 5);
+  } else if (p.windup) {
+    hammerHead(cx - 12, 20 + bob);
+    hammerGrip(cx - 9, 25 + bob, 5);
+    armH(cx - 7, 22 + bob, 8);
+    bracer(cx - 1, 21 + bob);
+    armV(cx + 4, 21 + bob, 5);
+    bracer(cx + 3, 25 + bob);
+  } else if (p.slam) {
+    armH(cx - 7, 20 + bob, 8);
+    bracer(cx - 2, 19 + bob);
+    armH(cx + 3, 22 + bob, 7);
+    bracer(cx + 6, 21 + bob);
+    hammerHead(cx - 1, 22 + bob);
+    hammerGrip(cx + 2, 27 + bob, 5);
+    fist(cx + 1, 25 + bob);
+    px(ctx, cx + 1, 32 + bob, 2, 5, "#bff4ff");
+    px(ctx, cx + 5, 34 + bob, 2, 4, "#35c8ff");
+    px(ctx, cx - 3, 33 + bob, 2, 4, "#35c8ff");
+  } else if (p.overhead) {
+    armV(cx + 4, 9 + bob, 11);
+    bracer(cx + 3, 13 + bob);
+    fist(cx + 6, 8 + bob);
+    hammerHead(cx + 7, 1 + bob);
+    hammerGrip(cx + 10, 6 + bob, 5);
+    armV(cx - 9, 22 + bob, 5);
+    bracer(cx - 9, 26 + bob);
+  } else if (p.hammerSpin) {
+    armH(cx + 3, 19 + bob, 10);
+    bracer(cx + 8, 18 + bob);
+    hammerHead(cx + 7, 13 + bob);
+    hammerGrip(cx + 10, 18 + bob, 5);
+    fist(cx + 9, 16 + bob);
+    px(ctx, cx - 12, 11 + bob, 6, 1, "#bff4ff");
+    px(ctx, cx - 14, 15 + bob, 6, 1, "#35c8ff");
+    px(ctx, cx + 14, 12 + bob, 3, 1, "#bff4ff");
+    armV(cx - 9, 22 + bob, 5);
+    bracer(cx - 9, 26 + bob);
+  } else if (p.charge) {
+    armV(cx + 4, 9 + bob, 11);
+    bracer(cx + 3, 13 + bob);
+    fist(cx + 6, 8 + bob);
+    hammerHead(cx + 7, 2 + bob);
+    hammerGrip(cx + 10, 7 + bob, 5);
+    px(ctx, cx + 8, 10 + bob, 2, 3, "#bff4ff");
+    px(ctx, cx + 10, 14 + bob, 2, 3, "#35c8ff");
+    armV(cx - 9, 22 + bob, 5);
+    bracer(cx - 9, 26 + bob);
+  } else if (p.beam) {
+    armV(cx + 3, 12 + bob, 8);
+    bracer(cx + 2, 17 + bob);
+    hammerHead(cx + 0, 5 + bob);
+    px(ctx, cx - 2, 2 + bob, 13, 12, "#ffffff");
+    px(ctx, cx + 0, 4 + bob, 9, 8, "#bff4ff");
+    armV(cx - 9, 22 + bob, 5);
+    bracer(cx - 9, 26 + bob);
+  } else if (p.stormcall) {
+    armV(cx + 3, 24 + bob, 8);
+    bracer(cx + 2, 29 + bob);
+    hammerHead(cx + 0, 36 + bob);
+    hammerGrip(cx + 3, 41 + bob, 4);
+    fist(cx + 2, 33 + bob);
+    px(ctx, cx + 1, 32 + bob, 5, 2, "#bff4ff");
+    armV(cx - 9, 22 + bob, 5);
+    bracer(cx - 9, 26 + bob);
+  } else if (p.sweep) {
+    armH(cx + 1, 27 + bob, 10);
+    bracer(cx + 6, 26 + bob);
+    hammerHead(cx + 5, 30 + bob);
+    hammerGrip(cx + 8, 35 + bob, 5);
+    fist(cx + 7, 33 + bob);
+    armV(cx - 9, 22 + bob, 5);
+    bracer(cx - 9, 26 + bob);
+  } else if (p.punch > 0) {
+    const ey = 21 + bob - p.punch;
+    armH(cx + 3, ey, 10);
+    bracer(cx + 8, ey - 1 + 0);
+    hammerHead(cx + 6, ey + 2);
+    hammerGrip(cx + 9, ey + 7, 5);
+    fist(cx + 8, ey + 5);
+    px(ctx, cx - 2, ey + 1, 4, 1, "#bff4ff");
+    armV(cx - 9, 22 + bob, 5);
+    bracer(cx - 9, 26 + bob);
+  } else if (p.kick > 0) {
+    px(ctx, cx + 2, 36 + bob, 13, 5, BL);
+    px(ctx, cx + 2, 36 + bob, 13, 1, HI);
+    px(ctx, cx + 11, 35 + bob, 4, 6, "#3a3a4d");
+    armH(cx - 9, 20 + bob, 8);
+    bracer(cx - 4, 19 + bob);
+    armV(cx + 4, 20 + bob, 5);
+    bracer(cx + 3, 24 + bob);
+  } else {
+    armV(cx - 9, 20 + bob - p.armSwing, 6);
+    bracer(cx - 9, 25 + bob - p.armSwing);
+    fist(cx - 9, 29 + bob - p.armSwing);
+    armV(cx + 5, 20 + bob + p.armSwing, 6);
+    bracer(cx + 5, 25 + bob + p.armSwing);
+    hammerHead(cx + 6, 30 + bob);
+    hammerGrip(cx + 9, 35 + bob, 5);
+    fist(cx + 8, 36 + bob);
+    if (p.dash) {
+      px(ctx, cx - 14, 24 + bob, 4, 1, "#bff4ff");
+      px(ctx, cx - 16, 27 + bob, 6, 1, "#35c8ff");
+    }
+  }
+  ctx.restore();
+}
+
+const LY_U2 = Object.freeze({
+  torso: "#e6b48c", rim: "#ff7a1a", pants: "#14141c", shade: "#5a0d12",
+  skin: "#e6b48c", hair: "#c8a45e", eye: "#0b0b10", eyeHi: "#ff7a1a",
+  boot: "#000000", bootHi: "#3a3a4d", cape: null, belt: null,
+});
+
+function paintUroboros(ctx, p) {
+  const cx = 18;
+  if (p.lying) { paintLying(ctx, p.lk || 0, LY_U2); return; }
+  const bob = p.bob;
+  const SK = "#e6b48c", SKD = "#b98a63", MASS = "#5a0d12", FLESH = "#c01414";
+  const EYE = "#ff7a1a", PN = "#14141c", PD = "#08080d";
+
+  const drop = (p.crouch ? 7 : 0) + (p.dip || 0);
+  const lean = (p.dash ? 2 : 0) + (p.wind || 0);
+  if (p.crouch) {
+    leg(ctx, cx - 9 + p.legL, 40 + bob, 6, PN, PD, "#000000", "#3a3a4d");
+    leg(ctx, cx + 4 + p.legR, 40 + bob, 6, PN, PD, "#000000", "#3a3a4d");
+  } else if (p.air === 1) {
+    leg(ctx, cx - 6 + p.legL, 37 + bob, 7, PN, PD, "#000000", "#3a3a4d");
+    leg(ctx, cx + 1 + p.legR, 39 + bob, 5, PN, PD, "#000000", "#3a3a4d");
+  } else if (p.air === 2) {
+    leg(ctx, cx - 6 + p.legL, 34 + bob, 11, PN, PD, "#000000", "#3a3a4d");
+    leg(ctx, cx + 1 + p.legR, 35 + bob, 10, PN, PD, "#000000", "#3a3a4d");
+  } else if (p.dash) {
+    leg(ctx, cx - 10, 36 + bob, 10, PN, PD, "#000000", "#3a3a4d");
+    leg(ctx, cx + 4, 36 + bob, 10, PN, PD, "#000000", "#3a3a4d");
+  } else if (p.brace) {
+    leg(ctx, cx - 8 + (p.legL || 0), 34 + bob, 12, PN, PD, "#000000", "#3a3a4d");
+    leg(ctx, cx + 3 + (p.legR || 0), 34 + bob, 12, PN, PD, "#000000", "#3a3a4d");
+  } else {
+    leg(ctx, cx - 6 + p.legL, 34 + bob, 12, PN, PD, "#000000", "#3a3a4d");
+    leg(ctx, cx + 1 + p.legR, 34 + bob, 12, PN, PD, "#000000", "#3a3a4d");
+  }
+  ctx.save();
+  ctx.translate(lean, drop);
+
+  // MUTATED TORSO: burst biomass, gaping chest-maw ringed with teeth, weeping pits
+  box(ctx, cx - 8, 18 + bob, 16, 17, SK);
+  px(ctx, cx - 8, 18 + bob, 4, 17, "#f4d0a8");
+  px(ctx, cx + 4, 18 + bob, 4, 17, SKD);
+  px(ctx, cx - 4, 20 + bob, 3, 13, MASS);
+  px(ctx, cx + 0, 22 + bob, 3, 10, MASS);
+  px(ctx, cx - 5, 27 + bob, 2, 7, MASS);
+  // chest-maw: black pit, flesh rim, bone teeth, ember gut-glow
+  px(ctx, cx - 3, 24 + bob, 7, 6, OUT);
+  px(ctx, cx - 2, 25 + bob, 5, 4, "#0b0b10");
+  px(ctx, cx - 3, 24 + bob, 7, 1, FLESH);
+  px(ctx, cx - 3, 29 + bob, 7, 1, FLESH);
+  px(ctx, cx - 2, 25 + bob, 1, 4, "#ffffff");
+  px(ctx, cx + 2, 25 + bob, 1, 4, "#ffffff");
+  px(ctx, cx - 1, 27 + bob, 3, 1, "#ff7a1a");
+  px(ctx, cx - 7, 31 + bob, 14, 3, PN);
+  px(ctx, cx - 7, 31 + bob, 14, 1, "#3a3a4d");
+  // weeping shoulder pits + back ridge spikes
+  px(ctx, cx - 9, 16 + bob, 3, 3, OUT);
+  px(ctx, cx - 8, 17 + bob, 2, 1, "#0b0b10");
+  px(ctx, cx + 5, 30 + bob, 3, 2, OUT);
+  px(ctx, cx + 6, 30 + bob, 1, 1, "#0b0b10");
+
+  // SHOULDER MASS: triple-eyed, veined, drooling
+  px(ctx, cx - 12, 13 + bob, 11, 9, OUT);
+  px(ctx, cx - 11, 14 + bob, 9, 7, MASS);
+  px(ctx, cx - 11, 14 + bob, 9, 2, FLESH);
+  px(ctx, cx - 11, 19 + bob, 9, 1, "#7a1016");
+  px(ctx, cx - 9, 16 + bob, 2, 2, EYE);
+  px(ctx, cx - 5, 15 + bob, 2, 2, EYE);
+  px(ctx, cx - 6, 19 + bob, 2, 2, "#ff3b1a");
+  px(ctx, cx - 12, 11 + bob, 4, 3, OUT);
+  px(ctx, cx - 11, 12 + bob, 3, 2, MASS);
+  px(ctx, cx - 11, 12 + bob, 1, 1, EYE);
+  // drool strand
+  px(ctx, cx - 9, 22 + bob, 1, 3, FLESH);
+  px(ctx, cx + 1, 21 + bob, 1, 2, "#7a1016");
+
+  // HEAD: split jaw, cracked skull, extra eye, exposed teeth
+  const hy = 7 + bob + (p.headBob || 0);
+  box(ctx, cx - 5, hy, 10, 9, SK);
+  px(ctx, cx + 3, hy, 2, 9, SKD);
+  px(ctx, cx - 6, hy - 1, 3, 2, MASS);
+  px(ctx, cx - 5, hy, 10, 3, "#c8a45e");
+  px(ctx, cx - 5, hy + 2, 2, 3, "#c8a45e");
+  px(ctx, cx + 3, hy + 2, 2, 3, "#c8a45e");
+  px(ctx, cx - 4, hy - 1, 1, 1, EYE);
+  px(ctx, cx - 5, hy + 4, 10, 3, "#0b0b10");
+  px(ctx, cx - 5, hy + 4, 10, 1, "#3a3a4d");
+  px(ctx, cx - 4, hy + 4, 1, 3, "#ffffff");
+  px(ctx, cx + 2, hy + 4, 1, 3, "#ffffff");
+  px(ctx, cx + 1, hy + 5, 2, 1, "#ff7a1a");
+  px(ctx, cx - 3, hy + 8, 4, 1, SKD);
+  px(ctx, cx - 3, hy + 8, 4, 1, FLESH);
+  px(ctx, cx + 3, hy + 5, 2, 3, MASS);
+
+  const tendril = (x, y, len, dir, w) => {
+    const n = 5, step = Math.max(2, Math.floor(len / n));
+    for (let i = 0; i < n; i++) {
+      const ww = Math.max(2, w - Math.floor((i * w) / n));
+      const xx = dir > 0 ? x + i * step : x - i * step - ww;
+      const yy = y + (i % 2);
+      px(ctx, xx - 1, yy - 1, ww + 2, 5, OUT);
+      px(ctx, xx, yy, ww, 3, MASS);
+      px(ctx, xx, yy, ww, 1, FLESH);
+      if (i % 2 === 0) px(ctx, xx + 1, yy + 3, 1, 2, "#7a1016");
+    }
+    const tx = dir > 0 ? x + len : x - len;
+    px(ctx, tx - 1, y - 1, 4, 6, OUT);
+    px(ctx, tx, y, 3, 4, FLESH);
+    px(ctx, tx + (dir > 0 ? 1 : -2), y + 1, 1, 2, "#ffffff");
+    // blood flung off the tip
+    px(ctx, tx + (dir > 0 ? 3 : -4), y - 1, 2, 1, "#c01414");
+    px(ctx, Math.round(x + dir * len * 0.45), y, 2, 2, EYE);
+  };
+  const spike = (x, y, len, dir) => {
+    for (let i = 0; i < 5; i++) {
+      const ww = Math.max(1, 5 - i);
+      const xx = dir > 0 ? x + i * 3 : x - i * 3 - ww;
+      px(ctx, xx - 1, y - 1 + Math.floor(i / 2), ww + 2, 4, OUT);
+      px(ctx, xx, y + Math.floor(i / 2), ww, 2, MASS);
+    }
+    const tx = dir > 0 ? x + len : x - len;
+    px(ctx, tx - 1, y + 1, 3, 3, OUT);
+    px(ctx, tx, y + 2, 2, 1, "#ffffff");
+  };
+  const armT = (x, y) => {
+    px(ctx, x - 1, y - 1, 6, 9, OUT);
+    px(ctx, x, y, 4, 7, SK);
+    px(ctx, x + 2, y, 2, 7, SKD);
+  };
+
+  if (p.seize) {
+    tendril(cx - 2, 22 + bob, 14, 1, 5);
+    tendril(cx - 4, 27 + bob, 11, 1, 4);
+    armT(cx - 9, 22 + bob);
+  } else if (p.guard === 1) {
+    for (let i = 0; i < 3; i++) {
+      const gx = cx + 2 + (i % 2) * 2;
+      px(ctx, gx - 1, 14 + bob + i * 6, 5, 8, OUT);
+      px(ctx, gx, 15 + bob + i * 6, 3, 6, MASS);
+      px(ctx, gx, 15 + bob + i * 6, 3, 2, FLESH);
+    }
+    px(ctx, cx + 3, 16 + bob, 2, 2, EYE);
+    armT(cx - 9, 22 + bob);
+  } else if (p.guard === 2) {
+    for (let i = 0; i < 3; i++) {
+      const gx = cx - 8 + i * 5;
+      px(ctx, gx - 1, 24 + bob, 6, 7, OUT);
+      px(ctx, gx, 25 + bob, 4, 5, MASS);
+      px(ctx, gx, 25 + bob, 4, 1, FLESH);
+    }
+    armT(cx - 9, 18 + bob);
+  } else if (p.windup) {
+    tendril(cx - 8, 20 + bob, 10, -1, 5);
+    armT(cx + 3, 22 + bob);
+    tendril(cx + 7, 24 + bob, 9, 1, 4);
+  } else if (p.lash === 1) {
+    // HIGH SWEEP: full-extension tentacle + back-tendril counterweight + white-hot edge
+    tendril(cx + 5, 20 + bob, 27, 1, 7);
+    tendril(cx - 6, 26 + bob, 12, -1, 5);
+    px(ctx, cx + 8, 24 + bob, 14, 1, "#ffffff");
+    px(ctx, cx + 8, 25 + bob, 14, 1, "#ff3b1a");
+    px(ctx, cx + 8, 27 + bob, 8, 1, "#bff4ff");
+    armT(cx - 9, 23 + bob);
+  } else if (p.lash === 2) {
+    // OVERHEAD LASH: tallest arc, motion streaks, spray
+    tendril(cx + 5, 15 + bob, 29, 1, 6);
+    tendril(cx - 4, 22 + bob, 10, -1, 4);
+    px(ctx, cx + 0, 2 + bob, 12, 1, "#ffffff");
+    px(ctx, cx + 0, 3 + bob, 12, 1, "#ff3b1a");
+    px(ctx, cx + 4, 5 + bob, 8, 1, "#35c8ff");
+    px(ctx, cx + 20, 10 + bob, 2, 2, "#c01414");
+    px(ctx, cx + 23, 12 + bob, 1, 2, "#c01414");
+    armT(cx - 9, 23 + bob);
+  } else if (p.lash === 3) {
+    // LOW GASH SWEEP: ground-level rip + torn ground streak + back spike
+    tendril(cx + 2, 33 + bob, 27, 1, 6);
+    px(ctx, cx + 4, 37 + bob, 16, 1, "#ffffff");
+    px(ctx, cx + 4, 38 + bob, 16, 1, "#ff3b1a");
+    px(ctx, cx + 20, 36 + bob, 3, 1, "#c01414");
+    armT(cx - 9, 22 + bob);
+    tendril(cx - 6, 16 + bob, 10, -1, 5);
+  } else if (p.slam2) {
+    tendril(cx + 1, 8 + bob, 8, 1, 5);
+    tendril(cx - 6, 20 + bob, 9, -1, 4);
+    armT(cx - 8, 12 + bob);
+    armT(cx + 4, 12 + bob);
+    spike(cx + 1, 22 + bob, 20, 1);
+    px(ctx, cx + 3, 30 + bob, 2, 5, "#bff4ff");
+    px(ctx, cx + 7, 32 + bob, 2, 4, "#35c8ff");
+    px(ctx, cx + 14, 24 + bob, 3, 2, "#c01414");
+  } else if (p.coil) {
+    tendril(cx - 4, 18 + bob, 15, 1, 7);
+    tendril(cx - 4, 25 + bob, 15, 1, 7);
+    tendril(cx - 2, 32 + bob, 12, 1, 6);
+    tendril(cx - 8, 14 + bob, 9, -1, 4);
+    px(ctx, cx + 2, 20 + bob, 2, 2, EYE);
+    px(ctx, cx + 2, 27 + bob, 2, 2, EYE);
+    px(ctx, cx + 0, 33 + bob, 2, 2, "#ff3b1a");
+    armT(cx - 10, 20 + bob);
+  } else if (p.rockhold) {
+    armT(cx - 8, 12 + bob);
+    armT(cx + 4, 12 + bob);
+    tendril(cx - 6, 10 + bob, 10, -1, 5);
+    tendril(cx + 8, 10 + bob, 10, 1, 5);
+    px(ctx, cx - 6, 0 + bob, 16, 10, OUT);
+    px(ctx, cx - 5, 1 + bob, 14, 8, "#5a5a70");
+    px(ctx, cx - 5, 1 + bob, 14, 2, "#9a9ab0");
+    px(ctx, cx - 2, 4 + bob, 3, 3, "#3a3a48");
+    px(ctx, cx - 2, 4 + bob, 1, 1, EYE);
+  } else if (p.impale) {
+    armT(cx - 9, 22 + bob);
+    tendril(cx - 6, 14 + bob, 10, -1, 5);
+    spike(cx + 4, 20 + bob, 23, 1);
+    px(ctx, cx + 12, 21 + bob, 8, 1, "#ff3b1a");
+    px(ctx, cx + 6, 24 + bob, 10, 1, "#bff4ff");
+    px(ctx, cx + 18, 22 + bob, 4, 2, "#c01414");
+    px(ctx, cx + 21, 24 + bob, 2, 3, "#7a1016");
+  } else {
+    // IDLE MUTATION: back tendril writhes, flesh drips, stray eye glints
+    tendril(cx - 10, 18 + bob + p.armSwing, 9, -1, 4);
+    tendril(cx - 8, 22 + bob + p.armSwing, 10, -1, 4);
+    armT(cx - 9, 22 + bob + p.armSwing);
+    armT(cx + 5, 22 + bob - p.armSwing);
+    tendril(cx + 8, 24 + bob - p.armSwing, 11, 1, 5);
+    px(ctx, cx - 8, 28 + bob, 1, 3, "#c01414");
+    px(ctx, cx + 10, 29 + bob, 1, 2, "#7a1016");
+    if (p.dash) {
+      px(ctx, cx - 14, 24 + bob, 4, 1, "#c01414");
+      px(ctx, cx - 16, 27 + bob, 6, 1, "#5a0d12");
+    }
+  }
+  ctx.restore();
+}
+
+const LY_SP = Object.freeze({
+  torso: "#c02828", rim: "#ff7a5c", pants: "#2043e0", shade: "#152c96",
+  skin: "#e6b48c", hair: "#0b0b10", eye: "#ffffff", eyeHi: "#0b0b10",
+  boot: "#0b0b10", bootHi: "#c02828", cape: null, belt: "#0b0b10",
+});
+
+function paintSpiderman(ctx, p) {
+  const cx = 18;
+  if (p.lying) { paintLying(ctx, p.lk || 0, LY_SP); return; }
+  const bob = p.bob;
+  const RD = "#c02828", DD = "#701414", BL = "#2043e0", BD = "#152c96";
+  const LITE = "#ff7a5c", EYE = "#ffffff", WEB = "#0b0b10";
+  const drop = (p.crouch ? 8 : 0) + (p.dip || 0);
+  const lean = (p.dash ? 2 : 0) + (p.wind || 0);
+  if (p.crouch) {
+    leg(ctx, cx - 9 + p.legL, 40 + bob, 6, BL, BD, "#0b0b10", RD);
+    leg(ctx, cx + 4 + p.legR, 40 + bob, 6, BL, BD, "#0b0b10", RD);
+  } else if (p.air === 1) {
+    leg(ctx, cx - 6 + p.legL, 37 + bob, 7, BL, BD, "#0b0b10", RD);
+    leg(ctx, cx + 1 + p.legR, 39 + bob, 5, BL, BD, "#0b0b10", RD);
+  } else if (p.air === 2) {
+    leg(ctx, cx - 6 + p.legL, 34 + bob, 11, BL, BD, "#0b0b10", RD);
+    leg(ctx, cx + 1 + p.legR, 35 + bob, 10, BL, BD, "#0b0b10", RD);
+  } else if (p.dash) {
+    leg(ctx, cx - 10, 36 + bob, 10, BL, BD, "#0b0b10", RD);
+    leg(ctx, cx + 4, 36 + bob, 10, BL, BD, "#0b0b10", RD);
+  } else if (p.brace) {
+    leg(ctx, cx - 9 + (p.legL || 0), 38 + bob, 8, BL, BD, "#0b0b10", RD);
+    leg(ctx, cx + 4 + (p.legR || 0), 38 + bob, 8, BL, BD, "#0b0b10", RD);
+  } else {
+    leg(ctx, cx - 6 + p.legL, 34 + bob, 12, BL, BD, "#0b0b10", RD);
+    leg(ctx, cx + 1 + p.legR, 34 + bob, 12, BL, BD, "#0b0b10", RD);
+  }
+  ctx.save();
+  ctx.translate(lean, drop);
+  box(ctx, cx - 6, 19 + bob, 12, 16, RD);
+  px(ctx, cx - 6, 19 + bob, 2, 16, LITE);
+  px(ctx, cx + 4, 19 + bob, 2, 16, DD);
+  px(ctx, cx - 2, 19 + bob, 1, 16, WEB);
+  px(ctx, cx - 6, 24 + bob, 12, 1, WEB);
+  px(ctx, cx - 6, 29 + bob, 12, 1, WEB);
+  px(ctx, cx - 4, 21 + bob, 3, 3, BL);
+  px(ctx, cx + 1, 21 + bob, 3, 3, BL);
+  const hy = 7 + bob + (p.headBob || 0);
+  box(ctx, cx - 5, hy, 10, 9, RD);
+  px(ctx, cx - 5, hy, 10, 1, WEB);
+  px(ctx, cx - 1, hy, 1, 9, WEB);
+  px(ctx, cx - 4, hy + 3, 3, 4, EYE);
+  px(ctx, cx + 1, hy + 3, 3, 4, EYE);
+  px(ctx, cx - 4, hy + 3, 3, 1, WEB);
+  px(ctx, cx + 1, hy + 3, 3, 1, WEB);
+  px(ctx, cx - 2, hy + 8, 4, 1, DD);
+  const armR = (x, y, w, h) => {
+    px(ctx, x - 1, y - 1, w + 2, h + 2, OUT);
+    px(ctx, x, y, w, h, RD);
+    px(ctx, x, y, w, 1, LITE);
+    px(ctx, x, y + 2, w, 1, WEB);
+  };
+  const fistR = (x, y) => {
+    px(ctx, x - 1, y - 1, 6, 6, OUT);
+    px(ctx, x, y, 4, 4, RD);
+    px(ctx, x, y, 4, 1, WEB);
+  };
+  if (p.seize) {
+    armR(cx - 2, 21 + bob, 11, 4);
+    fistR(cx + 9, 20 + bob);
+    armR(cx - 9, 22 + bob, 5, 8);
+    fistR(cx - 10, 26 + bob);
+    px(ctx, cx + 11, 21 + bob, 6, 1, EYE);
+  } else if (p.guard === 1) {
+    armR(cx + 1, 17 + bob, 6, 12);
+    fistR(cx + 1, 15 + bob);
+    armR(cx - 9, 24 + bob, 5, 7);
+    px(ctx, cx + 1, 17 + bob, 6, 1, WEB);
+  } else if (p.guard === 2) {
+    px(ctx, cx - 9, 22 + bob, 15, 8, OUT);
+    px(ctx, cx - 8, 23 + bob, 13, 2, BL);
+    px(ctx, cx - 8, 27 + bob, 13, 2, BD);
+    fistR(cx - 9, 23 + bob);
+    fistR(cx + 4, 23 + bob);
+  } else if (p.windup) {
+    armR(cx - 10, 19 + bob, 6, 10);
+    fistR(cx - 10, 25 + bob);
+    armR(cx + 4, 21 + bob, 6, 10);
+    fistR(cx + 4, 27 + bob);
+  } else if (p.webshoot) {
+    armR(cx + 2, 20 + bob, 12, 5);
+    fistR(cx + 11, 19 + bob);
+    px(ctx, cx + 14, 20 + bob, 8, 1, EYE);
+    px(ctx, cx + 12, 22 + bob, 10, 1, "#9fd4ff");
+    armR(cx - 10, 24 + bob, 5, 8);
+    fistR(cx - 11, 28 + bob);
+  } else if (p.webyank) {
+    armR(cx + 2, 16 + bob, 12, 5);
+    fistR(cx + 11, 15 + bob);
+    px(ctx, cx + 14, 12 + bob, 8, 1, EYE);
+    px(ctx, cx + 14, 16 + bob, 8, 1, EYE);
+    px(ctx, cx + 14, 20 + bob, 6, 1, "#9fd4ff");
+    armR(cx - 10, 22 + bob, 5, 9);
+    fistR(cx - 11, 27 + bob);
+  } else if (p.webstorm) {
+    armR(cx - 12, 16 + bob, 10, 5);
+    fistR(cx - 14, 15 + bob);
+    armR(cx + 2, 16 + bob, 10, 5);
+    fistR(cx + 9, 15 + bob);
+    px(ctx, cx - 12, 12 + bob, 22, 1, EYE);
+    px(ctx, cx - 10, 18 + bob, 18, 1, "#9fd4ff");
+  } else if (p.spideyLoad) {
+    armR(cx - 10, 24 + bob, 6, 8);
+    fistR(cx - 11, 28 + bob);
+    armR(cx + 3, 24 + bob, 6, 8);
+    fistR(cx + 2, 28 + bob);
+    px(ctx, cx - 8, 30 + bob, 16, 1, WEB);
+    px(ctx, cx - 12, 26 + bob, 3, 1, EYE);
+  } else if (p.spideyElbow) {
+    px(ctx, cx - 6, 22 + bob, 12, 6, OUT);
+    px(ctx, cx - 5, 23 + bob, 10, 4, RD);
+    px(ctx, cx - 5, 23 + bob, 10, 1, LITE);
+    fistR(cx + 3, 21 + bob);
+    px(ctx, cx + 5, 22 + bob, 6, 2, EYE);
+    px(ctx, cx + 5, 24 + bob, 8, 1, "#9fd4ff");
+    armR(cx - 10, 24 + bob, 5, 8);
+    fistR(cx - 11, 28 + bob);
+    px(ctx, cx - 4, 34 + bob, 10, 2, BL);
+  } else if (p.spideyKick) {
+    px(ctx, cx - 8, 20 + bob, 8, 12, OUT);
+    px(ctx, cx - 7, 21 + bob, 6, 10, RD);
+    px(ctx, cx - 7, 21 + bob, 6, 2, WEB);
+    px(ctx, cx + 0, 16 + bob, 15, 5, OUT);
+    px(ctx, cx + 1, 17 + bob, 13, 3, BL);
+    px(ctx, cx + 1, 17 + bob, 13, 1, LITE);
+    px(ctx, cx + 12, 16 + bob, 4, 5, "#0b0b10");
+    px(ctx, cx - 12, 22 + bob, 5, 2, EYE);
+    px(ctx, cx - 14, 25 + bob, 7, 1, "#9fd4ff");
+    armR(cx - 9, 26 + bob, 5, 7);
+    fistR(cx - 10, 30 + bob);
+  } else if (p.spideySweep) {
+    px(ctx, cx - 12, 34 + bob, 8, 6, OUT);
+    px(ctx, cx - 11, 35 + bob, 6, 4, BL);
+    fistR(cx - 13, 33 + bob);
+    px(ctx, cx - 2, 37 + bob, 16, 4, OUT);
+    px(ctx, cx - 1, 38 + bob, 14, 2, BL);
+    px(ctx, cx - 1, 38 + bob, 14, 1, LITE);
+    px(ctx, cx + 11, 37 + bob, 4, 4, "#0b0b10");
+    px(ctx, cx - 4, 40 + bob, 18, 1, EYE);
+    px(ctx, cx - 6, 42 + bob, 20, 1, "#9fd4ff");
+    px(ctx, cx + 4, 20 + bob, 6, 10, OUT);
+    px(ctx, cx + 5, 21 + bob, 4, 8, RD);
+  } else if (p.spideyLeap) {
+    px(ctx, cx - 8, 12 + bob, 9, 14, OUT);
+    px(ctx, cx - 7, 13 + bob, 7, 12, RD);
+    px(ctx, cx - 7, 13 + bob, 7, 2, WEB);
+    fistR(cx - 6, 22 + bob);
+    px(ctx, cx - 8, 26 + bob, 10, 2, EYE);
+    px(ctx, cx - 8, 28 + bob, 10, 1, "#9fd4ff");
+    px(ctx, cx + 2, 26 + bob, 9, 5, OUT);
+    px(ctx, cx + 3, 27 + bob, 7, 3, BL);
+    px(ctx, cx + 8, 26 + bob, 4, 5, "#0b0b10");
+    px(ctx, cx - 2, 8 + bob, 8, 1, EYE);
+    armR(cx + 4, 14 + bob, 5, 8);
+  } else if (p.spideyFlip) {
+    px(ctx, cx - 10, 20 + bob, 20, 6, OUT);
+    px(ctx, cx - 9, 21 + bob, 18, 4, RD);
+    px(ctx, cx - 9, 21 + bob, 18, 1, WEB);
+    px(ctx, cx - 14, 19 + bob, 5, 5, BL);
+    px(ctx, cx + 9, 24 + bob, 5, 5, BL);
+    px(ctx, cx - 15, 18 + bob, 3, 3, "#0b0b10");
+    px(ctx, cx + 10, 25 + bob, 3, 3, "#0b0b10");
+    fistR(cx - 2, 19 + bob);
+    fistR(cx + 2, 24 + bob);
+    px(ctx, cx - 12, 14 + bob, 8, 1, EYE);
+    px(ctx, cx + 4, 30 + bob, 8, 1, "#9fd4ff");
+  } else if (p.spideyDive) {
+    px(ctx, cx - 4, 10 + bob, 10, 12, OUT);
+    px(ctx, cx - 3, 11 + bob, 8, 10, RD);
+    px(ctx, cx - 3, 11 + bob, 8, 2, WEB);
+    px(ctx, cx - 4, 12 + bob, 3, 3, EYE);
+    px(ctx, cx + 1, 12 + bob, 3, 3, EYE);
+    px(ctx, cx - 2, 24 + bob, 14, 6, OUT);
+    px(ctx, cx - 1, 25 + bob, 12, 4, BL);
+    px(ctx, cx - 1, 25 + bob, 12, 1, LITE);
+    px(ctx, cx + 9, 25 + bob, 4, 5, "#0b0b10");
+    px(ctx, cx - 10, 16 + bob, 4, 10, OUT);
+    px(ctx, cx - 9, 17 + bob, 2, 8, RD);
+    px(ctx, cx - 12, 20 + bob, 6, 1, EYE);
+    px(ctx, cx - 14, 24 + bob, 8, 1, "#9fd4ff");
+  } else if (p.spideySwing) {
+    px(ctx, cx + 1, 2 + bob, 5, 12, OUT);
+    px(ctx, cx + 2, 3 + bob, 3, 10, RD);
+    fistR(cx + 0, 0 + bob);
+    px(ctx, cx + 3, -6 + bob, 2, 8, EYE);
+    px(ctx, cx + 2, -8 + bob, 4, 2, "#9fd4ff");
+    px(ctx, cx - 8, 24 + bob, 7, 9, OUT);
+    px(ctx, cx - 7, 25 + bob, 5, 7, RD);
+    fistR(cx - 9, 28 + bob);
+    px(ctx, cx - 12, 20 + bob, 5, 1, EYE);
+    px(ctx, cx - 14, 23 + bob, 7, 1, "#9fd4ff");
+  } else if (p.slam) {
+    armR(cx - 7, 4 + bob, 6, 13);
+    armR(cx + 1, 4 + bob, 6, 13);
+    fistR(cx - 8, 2 + bob);
+    fistR(cx + 1, 2 + bob);
+    px(ctx, cx - 2, 8 + bob, 4, 6, EYE);
+  } else if (p.punch > 0) {
+    armR(cx - 9, 21 + bob, 5, 10);
+    const ex = cx + 6, ey = 22 + bob - p.punch;
+    px(ctx, ex - 1, ey - 1, 12, 5, OUT);
+    px(ctx, ex, ey, 11, 3, RD);
+    px(ctx, ex, ey + 2, 11, 1, WEB);
+    px(ctx, ex + 8, ey - 1, 4, 5, RD);
+  } else if (p.kick > 0) {
+    armR(cx - 9, 21 + bob, 5, 10);
+    armR(cx + 4, 21 + bob, 5, 10);
+    px(ctx, cx + 2, 36 + bob, 13, 5, BL);
+    px(ctx, cx + 2, 36 + bob, 13, 1, WEB);
+    px(ctx, cx + 11, 35 + bob, 4, 6, "#0b0b10");
+  } else {
+    armR(cx - 9, 21 + bob + p.armSwing, 5, 10);
+    armR(cx + 4, 21 + bob - p.armSwing, 5, 10);
+    fistR(cx - 10, 27 + bob + p.armSwing);
+    fistR(cx + 3, 27 + bob - p.armSwing);
+    if (p.dash) {
+      px(ctx, cx - 14, 24 + bob, 6, 1, EYE);
+      px(ctx, cx - 16, 27 + bob, 8, 1, "#9fd4ff");
+    }
+  }
+  ctx.restore();
+}
+
 function poses(kind) {
   return {
     idle: [
@@ -1050,31 +2105,29 @@ function poses(kind) {
       { bob: 0, headBob: 1, legL: -2, legR: 2, armSwing: 0, capeWave: 2, coatSway: 1, punch: 0, kick: 0, overhead: 1 },
       { bob: 0, headBob: 0, legL: -1, legR: 1, armSwing: 0, capeWave: -1, coatSway: -1, punch: 0, kick: 0, windup: 1, wind: -2, dip: 0, brace: 0, slam: 0 },
       { bob: 1, headBob: 1, legL: -2, legR: 2, armSwing: 0, capeWave: 2, coatSway: 1, punch: 0, kick: 0, windup: 0, wind: 3, dip: 5, brace: 1, slam: 1 },
-      // M8 normals: palm(6) elbow(7) backfist(8) cobra(9) hook(10) sweep(11).
+
       { bob: 0, headBob: 0, legL: -1, legR: 1, armSwing: 0, capeWave: 1, coatSway: 0, punch: 0, kick: 0, palm: 1, wind: 1 },
       { bob: 0, headBob: 0, legL: -2, legR: 2, armSwing: 0, capeWave: 1, coatSway: 1, punch: 0, kick: 0, elbow: 1, wind: 2, dip: 2 },
       { bob: 0, headBob: 1, legL: -1, legR: 2, armSwing: 0, capeWave: 2, coatSway: 1, punch: 0, kick: 0, backfist: 1, wind: 2 },
       { bob: 1, headBob: 0, legL: -2, legR: 2, armSwing: 0, capeWave: 3, coatSway: 2, punch: 0, kick: 0, cobra: 1, wind: 5, dip: 2, brace: 1 },
       { bob: 0, headBob: 0, legL: -1, legR: 2, armSwing: 0, capeWave: -2, coatSway: -1, punch: 0, kick: 0, hook: 1, wind: 2, brace: 1 },
       { bob: 0, headBob: 1, legL: -2, legR: 2, armSwing: 0, capeWave: 1, coatSway: 0, punch: 0, kick: 0, sweep: 1, crouch: 1 },
-      // 12: SAMURAI EDGE — leveled pistol, both hands extended (post-M14.5).
+
       { bob: 0, headBob: 0, legL: -2, legR: 2, armSwing: 0, capeWave: 1, coatSway: 0, punch: 0, kick: 0, gun: 1, wind: 1, brace: 1 },
-      // Crouch + air kit: folded legs under low strikes, tucked legs airborne.
-      // Cloth streams with the motion (coat/cape physics read from these).
-      { bob: 0, headBob: 0, legL: -1, legR: 1, armSwing: 0, capeWave: 0, coatSway: -1, punch: 0, kick: 0, palm: 1, crouch: 1, dip: 1 }, // 13 crouch palm
-      { bob: 0, headBob: 0, legL: -1, legR: 1, armSwing: 0, capeWave: 0, coatSway: 0, punch: 1, kick: 0, crouch: 1 }, // 14 crouch jab
-      { bob: 0, headBob: 1, legL: -2, legR: 2, armSwing: 0, capeWave: 1, coatSway: 0, punch: 0, kick: 0, sweep: 1, crouch: 1, brace: 1 }, // 15 crouch sweep
-      { bob: 0, headBob: -1, legL: 0, legR: 0, armSwing: -2, capeWave: 4, coatSway: 3, punch: 0, kick: 2, air: 1 }, // 16 air kick, cloth up
-      { bob: 0, headBob: 1, legL: -1, legR: 1, armSwing: 0, capeWave: 3, coatSway: 2, punch: 0, kick: 0, slam: 1, wind: 2, air: 1 }, // 17 air slam
-      // 18-23 Wolverine claw kit: slash / cross / low rake / dive / air slash / air dive.
+
+      { bob: 0, headBob: 0, legL: -1, legR: 1, armSwing: 0, capeWave: 0, coatSway: -1, punch: 0, kick: 0, palm: 1, crouch: 1, dip: 1 },
+      { bob: 0, headBob: 0, legL: -1, legR: 1, armSwing: 0, capeWave: 0, coatSway: 0, punch: 1, kick: 0, crouch: 1 },
+      { bob: 0, headBob: 1, legL: -2, legR: 2, armSwing: 0, capeWave: 1, coatSway: 0, punch: 0, kick: 0, sweep: 1, crouch: 1, brace: 1 },
+      { bob: 0, headBob: -1, legL: 0, legR: 0, armSwing: -2, capeWave: 4, coatSway: 3, punch: 0, kick: 2, air: 1 },
+      { bob: 0, headBob: 1, legL: -1, legR: 1, armSwing: 0, capeWave: 3, coatSway: 2, punch: 0, kick: 0, slam: 1, wind: 2, air: 1 },
+
       { bob: 0, headBob: 0, legL: -1, legR: 1, armSwing: 0, capeWave: 0, coatSway: 0, punch: 0, kick: 0, slash: 1, wind: 1 },
       { bob: 0, headBob: 0, legL: -2, legR: 2, armSwing: 0, capeWave: 0, coatSway: 0, punch: 0, kick: 0, cross: 1, wind: 2, dip: 1 },
       { bob: 0, headBob: 1, legL: -1, legR: 1, armSwing: 0, capeWave: 0, coatSway: 0, punch: 0, kick: 0, slash: 1, crouch: 1, crouchSlash: 1 },
       { bob: 1, headBob: 0, legL: -2, legR: 2, armSwing: 0, capeWave: 0, coatSway: 0, punch: 0, kick: 0, dive: 1, wind: 4, dip: 2, brace: 1 },
       { bob: 0, headBob: -1, legL: 0, legR: 0, armSwing: -2, capeWave: 0, coatSway: 0, punch: 0, kick: 0, slash: 1, air: 1 },
       { bob: 0, headBob: 1, legL: -1, legR: 1, armSwing: 0, capeWave: 0, coatSway: 0, punch: 0, kick: 0, dive: 1, wind: 2, air: 1 },
-      // 24-30 Hulk gamma kit: smash / backhand / low stomp / quake slam /
-      // crouch stomp / air smash / air quake.
+
       { bob: 0, headBob: 0, legL: -2, legR: 2, armSwing: 0, capeWave: 0, coatSway: 0, punch: 0, kick: 0, smash: 1, wind: 2, dip: 2, brace: 1 },
       { bob: 0, headBob: 0, legL: -1, legR: 2, armSwing: 0, capeWave: 0, coatSway: 0, punch: 0, kick: 0, backhand: 1, wind: 2, brace: 1 },
       { bob: 0, headBob: 1, legL: -1, legR: 1, armSwing: 0, capeWave: 0, coatSway: 0, punch: 0, kick: 0, stomp: 1, crouch: 1, brace: 1 },
@@ -1082,9 +2135,53 @@ function poses(kind) {
       { bob: 0, headBob: 0, legL: -1, legR: 1, armSwing: 0, capeWave: 0, coatSway: 0, punch: 0, kick: 0, stomp: 1, crouch: 1, dip: 1 },
       { bob: 0, headBob: -1, legL: 0, legR: 0, armSwing: -2, capeWave: 0, coatSway: 0, punch: 0, kick: 0, smash: 1, air: 1 },
       { bob: 0, headBob: 1, legL: -1, legR: 1, armSwing: 0, capeWave: 0, coatSway: 0, punch: 0, kick: 0, quake: 1, wind: 2, air: 1 },
+
+      { bob: 0, headBob: 0, legL: -2, legR: 2, armSwing: 0, capeWave: 0, coatSway: 0, punch: 0, kick: 0, repulsor: 1, wind: 1, brace: 1 },
+      { bob: 0, headBob: 0, legL: -2, legR: 2, armSwing: 0, capeWave: 0, coatSway: 0, punch: 0, kick: 0, burst: 1, wind: 2, brace: 1 },
+      { bob: 0, headBob: 0, legL: -2, legR: 2, armSwing: 0, capeWave: 0, coatSway: 0, punch: 0, kick: 0, beam: 1, wind: 2, brace: 1 },
+      { bob: 0, headBob: -1, legL: 0, legR: 0, armSwing: 0, capeWave: 0, coatSway: 0, punch: 0, kick: 0, hover: 1, air: 1 },
+
+      { bob: 0, headBob: 0, legL: -1, legR: 1, armSwing: 0, capeWave: 1, coatSway: 0, punch: 2, kick: 0 },
+      { bob: 0, headBob: 0, legL: -2, legR: 2, armSwing: 0, capeWave: 2, coatSway: 1, punch: 4, kick: 0, hammerSpin: 1, wind: 2, brace: 1 },
+      { bob: 0, headBob: 1, legL: -2, legR: 2, armSwing: 0, capeWave: 1, coatSway: 0, punch: 0, kick: 0, sweep: 1, crouch: 1, brace: 1 },
+      { bob: 0, headBob: 1, legL: -2, legR: 2, armSwing: 0, capeWave: 3, coatSway: 2, punch: 0, kick: 0, slam: 1, wind: 3, dip: 5, brace: 1 },
+      { bob: 0, headBob: 0, legL: -2, legR: 2, armSwing: 0, capeWave: 2, coatSway: 1, punch: 0, kick: 0, hammerSpin: 1, wind: 1, brace: 1 },
+      { bob: 0, headBob: -1, legL: -2, legR: 2, armSwing: 0, capeWave: 4, coatSway: 3, punch: 0, kick: 0, charge: 1, brace: 1, wind: -1 },
+      { bob: 0, headBob: 0, legL: -2, legR: 2, armSwing: 0, capeWave: 4, coatSway: 3, punch: 0, kick: 0, beam: 1, brace: 1, wind: 2 },
+      { bob: 0, headBob: -1, legL: -2, legR: 2, armSwing: 0, capeWave: 3, coatSway: 2, punch: 0, kick: 0, overhead: 1, wind: 2, brace: 1 },
+      { bob: 1, headBob: 0, legL: -2, legR: 2, armSwing: 0, capeWave: 4, coatSway: 3, punch: 0, kick: 0, stormcall: 1, wind: 2, dip: 5, brace: 1 },
+
+      { bob: 0, headBob: 0, legL: -1, legR: 1, armSwing: 0, capeWave: 1, coatSway: 0, punch: 2, kick: 0, wind: 2, brace: 1, lash: 1 },
+      { bob: 0, headBob: 0, legL: -2, legR: 2, armSwing: 0, capeWave: 2, coatSway: 1, punch: 4, kick: 0, wind: 3, dip: 1, brace: 1, lash: 2 },
+      { bob: 0, headBob: 1, legL: -2, legR: 2, armSwing: 0, capeWave: 1, coatSway: 0, punch: 0, kick: 0, wind: 2, dip: 2, brace: 1, crouch: 1, lash: 3 },
+      { bob: 1, headBob: 0, legL: -2, legR: 2, armSwing: 0, capeWave: 3, coatSway: 2, punch: 0, kick: 0, wind: 4, dip: 3, brace: 1, slam2: 1 },
+      { bob: 0, headBob: 0, legL: -2, legR: 2, armSwing: 0, capeWave: 2, coatSway: 1, punch: 0, kick: 0, wind: 2, brace: 1, coil: 1 },
+      { bob: 0, headBob: -1, legL: -2, legR: 2, armSwing: 0, capeWave: 3, coatSway: 2, punch: 0, kick: 0, wind: -2, brace: 1, rockhold: 1 },
+      { bob: 0, headBob: 0, legL: -1, legR: 1, armSwing: 0, capeWave: 2, coatSway: 1, punch: 0, kick: 0, wind: 4, dip: 2, brace: 1, impale: 1 },
+
+      { bob: 0, headBob: 0, legL: -2, legR: 2, armSwing: 0, capeWave: 0, coatSway: 0, punch: 3, kick: 0, webshoot: 1, wind: 1, brace: 1 },
+      { bob: 0, headBob: 1, legL: -1, legR: 1, armSwing: 0, capeWave: 0, coatSway: 0, punch: 0, kick: 3, webyank: 1, wind: 2, brace: 1 },
+      { bob: 1, headBob: 0, legL: -2, legR: 2, armSwing: 0, capeWave: 0, coatSway: 0, punch: 0, kick: 0, webstorm: 1, wind: 3, dip: 2, brace: 1 },
+
+      { bob: 1, headBob: 1, legL: -2, legR: 2, armSwing: 0, capeWave: 0, coatSway: 0, punch: 0, kick: 0, spideyLoad: 1, wind: -2, dip: 3, brace: 1 },
+      { bob: 0, headBob: 0, legL: -1, legR: 2, armSwing: 0, capeWave: 0, coatSway: 0, punch: 0, kick: 0, spideyElbow: 1, wind: 3, dip: 2, brace: 1 },
+      { bob: 0, headBob: -1, legL: -3, legR: 3, armSwing: 0, capeWave: 0, coatSway: 0, punch: 0, kick: 0, spideyKick: 1, wind: -3, dip: 1, brace: 1 },
+      { bob: 1, headBob: 1, legL: -2, legR: 2, armSwing: 0, capeWave: 0, coatSway: 0, punch: 0, kick: 0, spideySweep: 1, wind: 3, dip: 2, brace: 1, crouch: 1 },
+      { bob: 0, headBob: -1, legL: 0, legR: 0, armSwing: 0, capeWave: 0, coatSway: 0, punch: 0, kick: 0, spideyLeap: 1, wind: 3, dip: 0, brace: 1, air: 1 },
+      { bob: 0, headBob: 0, legL: 0, legR: 0, armSwing: 0, capeWave: 0, coatSway: 0, punch: 0, kick: 0, spideyFlip: 1, wind: 2, dip: 0, brace: 0, air: 1 },
+      { bob: 1, headBob: -1, legL: 0, legR: 0, armSwing: 0, capeWave: 0, coatSway: 0, punch: 0, kick: 0, spideyDive: 1, wind: 4, dip: 2, brace: 1, air: 1 },
+      { bob: 0, headBob: -1, legL: 0, legR: 0, armSwing: 0, capeWave: 0, coatSway: 0, punch: 0, kick: 0, spideySwing: 1, wind: 2, dip: 0, brace: 0, air: 1 },
+
+      { bob: 0, headBob: 0, legL: -1, legR: 1, armSwing: 0, capeWave: 1, coatSway: 0, punch: 2, kick: 0, wind: 1, brace: 1 },
+      { bob: 0, headBob: 0, legL: -2, legR: 2, armSwing: 0, capeWave: 2, coatSway: 1, punch: 4, kick: 0, wind: 2, brace: 1 },
+      { bob: 0, headBob: 1, legL: -1, legR: 2, armSwing: 0, capeWave: 2, coatSway: 1, punch: 0, kick: 2, wind: 2, brace: 1, crouch: 1 },
+      { bob: 0, headBob: 0, legL: -2, legR: 2, armSwing: 0, capeWave: 3, coatSway: 2, punch: 0, kick: 0, overhead: 1, wind: 3, brace: 1 },
+      { bob: 0, headBob: 0, legL: -2, legR: 2, armSwing: 0, capeWave: 2, coatSway: 1, punch: 0, kick: 0, slam: 1, wind: 3, brace: 1 },
+      { bob: 0, headBob: 0, legL: -2, legR: 2, armSwing: 0, capeWave: 3, coatSway: 2, punch: 0, kick: 0, beam: 1, wind: 2, brace: 1 },
+      { bob: 0, headBob: -1, legL: -2, legR: 2, armSwing: 0, capeWave: 4, coatSway: 3, punch: 0, kick: 0, snap: 1, wind: 2, brace: 1 },
+      { bob: 0, headBob: 0, legL: -2, legR: 2, armSwing: 0, capeWave: 4, coatSway: 3, punch: 0, kick: 0, throne: 1, wind: 2, brace: 1 },
     ],
-    // M2 poses. Every entry carries the full field set (missing fields read
-    // as `undefined`, which is falsy — safe for the stance branches above).
+
     crouch: [
       { bob: 0, headBob: 0, legL: 0, legR: 0, armSwing: 0, capeWave: 0, coatSway: 0, punch: 0, kick: 0, crouch: 1, air: 0, dash: 0 },
       { bob: 1, headBob: 0, legL: 0, legR: 0, armSwing: 0, capeWave: 1, coatSway: 1, punch: 0, kick: 0, crouch: 1, air: 0, dash: 0 },
@@ -1095,41 +2192,30 @@ function poses(kind) {
       { bob: 0, headBob: 0, legL: 2, legR: -2, armSwing: -1, capeWave: 1, coatSway: 1, punch: 0, kick: 0, crouch: 1, air: 0, dash: 0 },
       { bob: 1, headBob: 0, legL: 0, legR: 0, armSwing: 0, capeWave: 0, coatSway: 0, punch: 0, kick: 0, crouch: 1, air: 0, dash: 0 },
     ],
-    // Jump lifecycle: 0 anticipation crouch, 1 rise (cloth billowing up),
-    // 2 apex hang, 3 fall, 4 fast-fall flutter (cloth streams behind).
-    // currentFrame picks by vy (see fighter.js) — that IS the cloth physics
-    // read: rise/fall speed selects the cloth variant every frame.
+
     jump: [
-      { bob: 0, headBob: 1, legL: 0, legR: 0, armSwing: -2, capeWave: 1, coatSway: 1, punch: 0, kick: 0, crouch: 1, air: 0, dash: 0 }, // anticip
-      { bob: 0, headBob: -1, legL: 0, legR: 0, armSwing: -2, capeWave: 4, coatSway: 3, punch: 0, kick: 0, crouch: 0, air: 1, dash: 0 }, // rise
-      { bob: 0, headBob: 0, legL: -2, legR: 2, armSwing: 0, capeWave: 2, coatSway: 2, punch: 0, kick: 0, crouch: 0, air: 1, dash: 0 },  // hang
-      { bob: 0, headBob: 1, legL: 0, legR: 0, armSwing: 1, capeWave: -2, coatSway: -1, punch: 0, kick: 0, crouch: 0, air: 2, dash: 0 },  // fall
-      { bob: 1, headBob: 1, legL: 0, legR: 0, armSwing: 2, capeWave: -4, coatSway: -3, punch: 0, kick: 0, crouch: 0, air: 2, dash: 0 },  // fast fall
+      { bob: 0, headBob: 1, legL: 0, legR: 0, armSwing: -2, capeWave: 1, coatSway: 1, punch: 0, kick: 0, crouch: 1, air: 0, dash: 0 },
+      { bob: 0, headBob: -1, legL: 0, legR: 0, armSwing: -2, capeWave: 4, coatSway: 3, punch: 0, kick: 0, crouch: 0, air: 1, dash: 0 },
+      { bob: 0, headBob: 0, legL: -2, legR: 2, armSwing: 0, capeWave: 2, coatSway: 2, punch: 0, kick: 0, crouch: 0, air: 1, dash: 0 },
+      { bob: 0, headBob: 1, legL: 0, legR: 0, armSwing: 1, capeWave: -2, coatSway: -1, punch: 0, kick: 0, crouch: 0, air: 2, dash: 0 },
+      { bob: 1, headBob: 1, legL: 0, legR: 0, armSwing: 2, capeWave: -4, coatSway: -3, punch: 0, kick: 0, crouch: 0, air: 2, dash: 0 },
     ],
     dash: [
       { bob: 0, headBob: 0, legL: 0, legR: 0, armSwing: 0, capeWave: -3, coatSway: -2, punch: 0, kick: 0, crouch: 0, air: 0, dash: 1 },
       { bob: 1, headBob: 0, legL: 0, legR: 0, armSwing: 0, capeWave: -2, coatSway: -1, punch: 0, kick: 0, crouch: 0, air: 0, dash: 1 },
     ],
-    // M4 guard stances: stand guard (braced, leaned back) + crouch guard
-    // + stand-guard retreat (walk-cycle legs, played slow + reversed).
+
     block: [
       { bob: 0, headBob: 0, legL: -1, legR: 1, armSwing: 0, capeWave: -1, coatSway: -1, punch: 0, kick: 0, guard: 1, brace: 1, wind: -1 },
       { bob: 0, headBob: 1, legL: 0, legR: 0, armSwing: 0, capeWave: 0, coatSway: 0, punch: 0, kick: 0, guard: 2, crouch: 1 },
       { bob: 0, headBob: 0, legL: -2, legR: 2, armSwing: 0, capeWave: -1, coatSway: -1, punch: 0, kick: 0, guard: 1, guardWalk: 1, brace: 0, wind: -1 },
       { bob: 0, headBob: 0, legL: 2, legR: -2, armSwing: 0, capeWave: -1, coatSway: -1, punch: 0, kick: 0, guard: 1, guardWalk: 1, brace: 0, wind: -1 },
     ],
-    // M6 grab reach: driven forward onto braced legs, arms extended.
+
     grab: [
       { bob: 0, headBob: 0, legL: -1, legR: 1, armSwing: 0, capeWave: -3, coatSway: -2, punch: 0, kick: 0, seize: 1, brace: 1, wind: 3 },
     ],
-    // M10 Wesker specials: jaguar tackle + unmasked rage stand. (Homelander
-    // builds the same table but never displays it — unknown flags fall
-    // through to neutral arms, so the shared builder stays total.)
-    // M11 Homelander specials: heat-vision gaze (2) + sonic scream (3).
-    // (Wesker builds them too; never displayed — same fallthrough deal.)
-    // 4-9: new super beats — unmaskMid / leap / hover (Wesker O),
-    // charge / inhale / ascend (Homelander). Shared table, fallthrough-safe.
-    // 10: Wesker O carry — missile gripped overhead on the way down.
+
     special: [
       { bob: 0, headBob: 1, legL: -3, legR: 3, armSwing: 0, capeWave: -3, coatSway: -3, punch: 0, kick: 0, tackle: 1, brace: 1, wind: 4, dip: 3 },
       { bob: 0, headBob: 0, legL: 0, legR: 0, armSwing: 0, capeWave: 2, coatSway: 1, punch: 0, kick: 0, unmasked: 1 },
@@ -1143,12 +2229,11 @@ function poses(kind) {
       { bob: 0, headBob: -1, legL: 0, legR: 0, armSwing: 0, capeWave: 4, coatSway: 0, punch: 0, kick: 0, ascend: 1, lase: 1, air: 1 },
       { bob: 0, headBob: -2, legL: 0, legR: 0, armSwing: 0, capeWave: 2, coatSway: 2, punch: 0, kick: 0, carry: 1, unmasked: 1, air: 1 },
     ],
-    // Effort: strain (Homelander's throw-toss grimace).
+
     strain: [
       { bob: 0, headBob: 1, legL: -1, legR: 2, armSwing: 0, capeWave: -1, coatSway: -1, punch: 0, kick: 0, strain: 1, brace: 1, wind: 1, dip: 2 },
     ],
-    // Knockdown: 12 frames — 0 stagger, 1 tip, 2 collapse, 3 slam, 4-7
-    // flat-out (head on the floor), 8 push-up, 9 kneel, 10 crouch, 11 rise.
+
     kdown: [
       { bob: 0, headBob: 0, legL: 0, legR: 0, armSwing: 0, capeWave: 0, coatSway: 0, punch: 0, kick: 0, lying: 1, lk: 0 },
       { bob: 0, headBob: 0, legL: 0, legR: 0, armSwing: 0, capeWave: 0, coatSway: 0, punch: 0, kick: 0, lying: 1, lk: 1 },
@@ -1166,32 +2251,39 @@ function poses(kind) {
   };
 }
 
-export function buildSprites(kind) {
+export function buildSprites(kind, madFace = false) {
   const table = poses(kind);
-  const paint = kind === "wesker" ? paintWesker : kind === "wolverine" ? paintWolverine : kind === "hulk" ? paintHulk : paintHomelander;
-  const out = {}; // keys follow the pose table, so new states need no extra code
+  if (madFace && (kind === "wesker" || kind === "cheatwesker")) {
+
+    table.dash = [
+      { bob: 2, headBob: 1, legL: -5, legR: 5, armSwing: 2, capeWave: -6, coatSway: -5, punch: 0, kick: 0, dash: 1, wind: 4, dip: 2 },
+      { bob: 3, headBob: 2, legL: -7, legR: 7, armSwing: 3, capeWave: -8, coatSway: -7, punch: 0, kick: 0, dash: 1, wind: 7, dip: 3 },
+    ];
+
+    table.special = table.special.slice();
+    table.special[7] = { bob: 1, headBob: 0, legL: -5, legR: 5, armSwing: 4, capeWave: -6, coatSway: -5, punch: 0, kick: 0, charge: 1, wind: 6, dip: 3 };
+  }
+  const paint = kind === "wesker" || kind === "cheatwesker" ? paintWesker : kind === "wolverine" ? paintWolverine : kind === "hulk" ? paintHulk : kind === "ironman" ? paintIronman : kind === "thor" ? paintThor : kind === "spiderman" ? paintSpiderman : kind === "uroboros" ? paintUroboros : kind === "doom" ? paintDoom : paintHomelander;
+  const out = {};
   for (const key of Object.keys(table)) {
     out[key] = [];
     for (const p of table[key]) {
       const [c, ctx] = makeCanvas(SPRITE_W, SPRITE_H);
-      paint(ctx, p);
+      paint(ctx, madFace && (kind === "wesker" || kind === "cheatwesker") ? { ...p, madFace: 1, unmasked: 1 } : p);
       out[key].push(c);
     }
   }
   return out;
 }
 
-// Empty pixel rows below the boot bottoms in grounded stances (boots end on
-// row 48 of the 52-tall canvas). Fighter.draw offsets by this so feet sit
-// exactly on the ground plane instead of floating above it.
 export const FEET_PAD = 4;
 
-// Big readable portrait for character-select cards (head zoom, still pixelated).
 export function buildPortrait(kind) {
   const sprites = buildSprites(kind);
   const src = sprites.idle[0];
   const [c, ctx] = makeCanvas(32, 32);
-  // Crop head area (x 10..26, y 4..20) and scale up 2x with smoothing off.
+
   ctx.drawImage(src, 10, 4, 16, 16, 0, 0, 32, 32);
   return c;
 }
+

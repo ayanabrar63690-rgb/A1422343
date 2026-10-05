@@ -1,6 +1,15 @@
 // Pure snapshot helpers for LAN netplay. No DOM, no game imports —
 // main.js injects real Fighter construction. Fully headless-testable.
 
+// Set by main.js. Needed so a guest can materialise Doom's summoned clone,
+// which it cannot construct itself (no game imports here by design).
+let makeFighter = null;
+let groundY = 452;
+export function injectFighterFactory(fn, gy) {
+  makeFighter = fn;
+  if (typeof gy === "number") groundY = gy;
+}
+
 export const SPRITE_LISTS = Object.freeze([
   "idle", "walk", "attack", "crouch", "sneak", "jump",
   "dash", "block", "grab", "special", "strain", "kdown",
@@ -26,7 +35,7 @@ const FIGHTER_FIELDS = Object.freeze([
   "rage", "rageFlash", "moving", "crouchHeld", "blockLow",
   "blockRetreating", "specialId", "dashDir", "freezeT", "kT",
   "holdT", "invulnT", "vuln", "decayN", "bleedN", "sinceDamageT",
-  "animTime", "knockVX", "webT", "zipCD", "swingCD", "snapCD",
+  "animTime", "knockVX", "webT", "zipCD", "swingCD", "snapCD", "away",
 ]);
 
 export function snapFighter(f, frameIdx) {
@@ -39,6 +48,24 @@ export function snapFighter(f, frameIdx) {
     s.spPhase = null;
     s.spI = 0;
   }
+  // Doom's summoned clone has to reach the guest too, or it simply won't exist
+  // on their side of the fight.
+  if (f.doomBot) {
+    s.bot = {
+      x: f.doomBot.x, y: f.doomBot.y, vy: f.doomBot.vy,
+      grounded: f.doomBot.grounded, facing: f.doomBot.facing,
+      state: f.doomBot.state, stateT: f.doomBot.stateT,
+      hp: f.doomBot.hp, maxHp: f.doomBot.maxHp,
+      attackId: f.doomBot.attackId, phase: f.doomBot.phase,
+      phaseT: f.doomBot.phaseT, attackDir: f.doomBot.attackDir,
+      invulnT: f.doomBot.invulnT, freezeT: f.doomBot.freezeT,
+      kT: f.doomBot.kT, knockVX: f.doomBot.knockVX,
+      animTime: f.doomBot.animTime, blockLow: f.doomBot.blockLow,
+      frameIdx: frameOf(f.doomBot),
+    };
+  } else {
+    s.bot = null;
+  }
   return s;
 }
 
@@ -47,6 +74,24 @@ export function applyFighter(f, s) {
     if (s[k] !== undefined) f[k] = s[k];
   }
   f.kind = s.kind;
+  if (s.bot === null || s.bot === undefined) {
+    f.doomBot = null;
+  } else if (!f.doomBot) {
+    if (!makeFighter) return f;
+    f.doomBot = makeFighter("doom", s.bot.x, s.bot.y ?? groundY);
+    for (const k of Object.keys(s.bot)) {
+      if (k === "frameIdx") continue;
+      f.doomBot[k] = s.bot[k];
+    }
+    f.doomBot.isDoomBot = true;
+    f.doomBot.owner = f;
+    f.doomBot.noSpecials = true;
+  } else {
+    for (const k of Object.keys(s.bot)) {
+      if (k === "frameIdx") continue;
+      f.doomBot[k] = s.bot[k];
+    }
+  }
   return f;
 }
 
